@@ -6,7 +6,7 @@ from omegaconf import OmegaConf, open_dict
 
 
 def load_hydra_config_from_run(load_dir):
-    cfg_path = os.path.join(load_dir, ".hydra/config.yaml")
+    cfg_path = os.path.join(load_dir, "hydra/config.yaml")
     cfg = OmegaConf.load(cfg_path)
     return cfg
 
