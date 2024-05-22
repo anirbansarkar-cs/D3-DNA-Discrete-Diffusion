@@ -1,6 +1,12 @@
+import numpy as np
+import scipy
 from scipy import linalg
+import sklearn
+import Bio 
+from pymemsuite import fimo
 from captum.attr import GradientShap
 import logomaker
+import tqdm
 
 
 #############################################################################################
@@ -102,7 +108,9 @@ prerequisite:
     - x_test (observed sequences with shapes (N,L,A))
 
 example:
-    max_id,avg_id = calculate_cross_sequence_identity_batch(x_synthetic,x_test,batch_size)
+    percent_identity = calculate_cross_sequence_identity_batch(x_synthetic, x_test, batch_size)
+    max_percent_identity = np.max(percent_identity, axis=1)
+    global_max_percent_identity = np.max(max_percent_identity)
 '''
 
 def calculate_cross_sequence_identity_batch(X_train, X_test, batch_size):
@@ -128,6 +136,7 @@ def calculate_cross_sequence_identity_batch(X_train, X_test, batch_size):
     
     return seq_identity
 
+
 #############################################################################################
 # Sequence similarity: k-mer spectrum shift
 #############################################################################################
@@ -137,8 +146,9 @@ prerequisite:
     - x_test (observed sequences with shapes (N,L,A))
 
 example:
-    KLD,JSD = kmer_statistics(kmer_len, data1, data2)
+    kld, jsd = kmer_statistics(kmer_len, data1, data2)
 '''
+
 def kmer_statistics(kmer_length, data1, data2):
 
     #generate kmer distributions 
@@ -146,12 +156,12 @@ def kmer_statistics(kmer_length, data1, data2):
     dist2 = compute_kmer_spectra(data2, kmer_length)
 
     #computer KLD
-    entropy = np.round(np.sum(scipy.special.kl_div(dist1, dist2)), 6)
+    kld = np.round(np.sum(scipy.special.kl_div(dist1, dist2)), 6)
 
     #computer jensen-shannon 
-    JS_entropy = np.round(np.sum(scipy.spatial.distance.jensenshannon(dist1, dist2)), 6)
+    jsd = np.round(np.sum(scipy.spatial.distance.jensenshannon(dist1, dist2)), 6)
 
-    return entropy, JS_entropy
+    return kld, jsd
 
 def compute_kmer_spectra(
     X,
@@ -260,16 +270,51 @@ class kmer_featurization:
 '''
 prerequisite:
     - x_synthetic (generated seqeunces with shapes (N,L,A)) 
-    - x_test (observed sequences with shapes (N,L,A))
+    - x_train (observed training sequences with shapes (N,L,A))
     - oracle model 
 
 example:
-    activity1 = oracle.predict(x_synthetic)
-    activity2 = oracle.predict(x_test)
-    mse = conditional_generation_fidelity(activity1, activity2)
+    x_train = np.vstack([x_train, x_synthetic])
+    y_train = np.vstack([np.ones((N,1)), np.zeros((N,1))])
+
+    (x_train, y_train), (x_valid, y_valid), (x_test, y_test) = train_val_test_split(
+        x_train, y_train, val_size=0.1, test_size=0.2
+    )
+
+    # build model and train on dataset
+
+    pred = model.predict(x_test)
+    auroc = sklearn.metrics.roc_auc_score(y_test, pred) 
 '''
 
-
+def train_val_test_split(x_train, y_train, val_size=0.1, test_size=0.2):
+    
+    # Get the number of samples
+    N = len(x_train)
+    
+    # Shuffle indices
+    indices = np.random.permutation(N)
+    
+    # Calculate sizes of each split
+    val_start = int(N * (1 - val_size - test_size))
+    test_start = int(N * (1 - test_size))
+    
+    # Split indices
+    train_idx = indices[:val_start]
+    val_idx = indices[val_start:test_start]
+    test_idx = indices[test_start:]
+    
+    # Split data
+    x_train_split = x_train[train_idx]
+    y_train_split = y_train[train_idx]
+    
+    x_val_split = x_train[val_idx]
+    y_val_split = y_train[val_idx]
+    
+    x_test_split = x_train[test_idx]
+    y_test_split = y_train[test_idx]
+    
+    return (x_train_split, y_train_split), (x_val_split, y_val_split), (x_test_split, y_test_split)
 
 
 #############################################################################################
@@ -286,8 +331,8 @@ example:
 	x_test = one_hot_to_seq(x_test)
 	create_fasta_file(x_synthetic,'sythetic_seq.txt')
 	create_fasta_file(x_test,'test_seq.txt')
-	motif_count = motif_count('test_seq.txt',JASPAR_file)
-	motif_count_2 = motif_count('synthetic_seq.txt',JASPAR_file)
+	motif_count = motif_count('test_seq.txt', JASPAR_file)
+	motif_count_2 = motif_count('synthetic_seq.txt', JASPAR_file)
 	pr = enrich_pr(motif_count,motif_count_2)
 '''
 
@@ -368,13 +413,12 @@ prerequisite:
 
 example:
 
-	motif_matrix_test_gen_fm_conv = FIMO_scanning.find_motifs_per_sequence(test_gen_fm_conv_seq, 'sequences/test_gen_fm_conv_seq.txt', JASPAR_path)
-    activity1 = oracle.predict(x_synthetic)
-    activity2 = oracle.predict(x_test)
-    mse = conditional_generation_fidelity(activity1, activity2)
+	motif_matrix_test = FIMO_scanning.find_motifs_per_sequence(x_test, 'test_seq.txt', JASPAR_path)
+    motif_matrix_synthetic = FIMO_scanning.find_motifs_per_sequence(x_synthetic, 'synthetic_seq.txt', JASPAR_path)
+    C = np.cov(motif_matrix_test)
+    C2 = np.cov(motif_matrix_synthetic)
+    distance = frobenius_norm(C, C2)
 '''
-
-
 
 def covariance_matrix(x):
     return np.cov(x)
@@ -382,8 +426,6 @@ def covariance_matrix(x):
 
 def frobenius_norm(cov, cov2):
     return np.sqrt(np.sum((cov - cov2)**2))
-
-
 
 
 #############################################################################################
@@ -395,10 +437,10 @@ prerequisite:
     - oracle model 
 
 example:
-    shap_score = gradient_shap(x_seq,oracle,task_idx)
-    plot_attribution_map(x_seq,shap_score)
+    shap_score = gradient_shap(x_seq, oracle, task_idx)
+    plot_attribution_map(x_seq, shap_score)
 '''
-def gradient_shap(x_seq,model,class_index=0,trim_end=None):
+def gradient_shap(x_seq, model, class_index=0, trim_end=None):
 
 	x_seq = np.swapaxes(x_seq,1,2)
 	N,A,L = x_seq.shape
@@ -443,7 +485,7 @@ def gradient_shap(x_seq,model,class_index=0,trim_end=None):
     
     return np.swapaxes(score_cache,1,2)
 
-def plot_attribution_map(x_seq,shap_score,alphabet='ACGT',figsize=(20,1)):
+def plot_attribution_map(x_seq, shap_score, alphabet='ACGT', figsize=(20,1)):
 	
 	num_plot = len(x_seq)
 	fig = plt.figure(figsize=(20,2*num_plot))
@@ -473,6 +515,7 @@ def plot_attribution_map(x_seq,shap_score,alphabet='ACGT',figsize=(20,1)):
 		plt.xticks([])
 		plt.yticks([])
 
+
 #############################################################################################
 # Compositional similarity: Attribution consistency
 #############################################################################################
@@ -482,13 +525,14 @@ prerequisite:
     - oracle model 
 
 example:
-    shap_score = gradient_shap(x_seq,oracle,task_idx)
+    shap_score = gradient_shap(x_seq, oracle, task_idx)
     attributino_map = process_attribution_map(shap_score)
     mask = unit_mask(x_seq)
     phi_1_s, phi_2_s, r_s = spherical_coordinates_process_2_trad([attribution_map], x_seq, mask, radius_count_cutoff)
     LIM, box_length, box_volume, n_bins, n_bins_half = initialize_integration_2(0.1)
 	entropic_information = calculate_entropy_2(phi_1_s, phi_2_s, r_s, n_bins, 0.1, box_volume, prior_range=3)
 '''
+
 def process_attribution_map(saliency_map_raw):
     saliency_map_raw = saliency_map_raw - np.mean(saliency_map_raw, axis=-1, keepdims=True) # gradient correction
     saliency_map_raw = saliency_map_raw / np.sum(np.sqrt(np.sum(np.square(saliency_map_raw), axis=-1, keepdims=True)), axis=-2, keepdims=True) #normalize
@@ -647,23 +691,32 @@ def Empiciral_box_pdf_func_2 (phi_1, phi_2, r_s, n_bins, box_length, box_volume)
                 count_single_points+=1
     return Empirical_box_pdf * correction * 1 , Empirical_box_count *correction , Empirical_box_count_plain #, correction2
 
+
 #############################################################################################
 # Informativeness: Added information
 #############################################################################################
 '''
 prerequisite:
     - x_synthetic (generated seqeunces with shapes (N,L,A)) 
+    - y_synthetic (activities for sequences)
+    - x_train (observed sequences with shapes (N,L,A))
+    - y_train (activities for sequences)
+    - x_valid (observed sequences with shapes (N,L,A))
+    - y_valid (activities for sequences)
     - x_test (observed sequences with shapes (N,L,A))
-    - oracle model 
+    - y_test (activities for sequences)
 
 example:
-    activity1 = oracle.predict(x_synthetic)
-    activity2 = oracle.predict(x_test)
-    mse = conditional_generation_fidelity(activity1, activity2)
+    downsample = 0.25
+    N = x_train.shape[0]
+    num_downsample = int(N*downsample)
+    x_train = np.vstack([x_train[:num_downsample], x_synthetic])
+    y_train = np.vstack([y_train[:num_downsample], y_synthetic])
+
+    # train model using x_train, y_train
+
+    # evaluate model on x_test, y_test
 '''
-
-
-
 
 
 #############################################################################################
@@ -672,17 +725,19 @@ example:
 '''
 prerequisite:
     - x_synthetic (generated seqeunces with shapes (N,L,A)) 
-    - x_test (observed sequence with its functional activity used for conditional generation)
 
 example:
-    seq_identity = cond_seq_identity(x_synthetic,x_test)
+    max_percent_identity = sequence diversity(x_synthetic)
 '''
 
-def cond_seq_identity(x_synthetic,x_test):
-	N,L,A = x_synthetic.shape
-	id_score = np.sum(x*act_x)/L/N
+def sequence diversity(x, batch_size):
+    percent_identity = calculate_cross_sequence_identity_batch(x, x, batch_size)
+    val = []
+    for i in range(len(percent_identity)):
+        sort = np.sort(percent_identity[i])[::-1] 
+        val.append(sort[1]) # <-- take second highest percent identity due to match w/ self
+    return np.array(val)
 
-	return id_score
 
 
 #############################################################################################
@@ -695,27 +750,25 @@ prerequisite:
     - oracle model
 
 example:
-    activity = oracle.predict(x_synthetic)
-    mse = conditional_generation_fidelity(activity, y_test)
+    shap_scores = gradient_shap(x_seq, oracle, task_idx)
+    max_self_similarity = mechanistic_diversity(shap_scores)
+    
 '''
 
-
-#############################################################################################
-# Task-specific design
-#############################################################################################
-'''
-prerequisite:
-    - x_synthetic (generated seqeunces with shapes (N,L,A)) 
-    - x_test (observed sequences with shapes (N,L,A))
-    - oracle model 
-
-example:
-    activity1 = oracle.predict(x_synthetic)
-    activity2 = oracle.predict(x_test)
-    mse = conditional_generation_fidelity(activity1, activity2)
-'''
-
-
+def mechanistic_diversity(attr_scores):
+    N, L, A = attr_scores.shape    
+    
+    # Reshape the matrices for dot product computation
+    attr_scores = np.reshape(attr_scores, [-1, L * A])
+    
+    # Initialize the matrix to store the results
+    max_similarity = []    
+    # Process the training data in batches
+    for i in range(N):
+        val = np.dot(np.expand_dims(attr_scores[i,:], axis=0), attr_scores.T) 
+        max_similarity.append(np.sort(val)[::-1][1])
+    
+    return np.array(max_similarity)
 
 
 
