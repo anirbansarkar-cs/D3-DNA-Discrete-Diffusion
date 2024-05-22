@@ -1,0 +1,4 @@
+- noise.type=geometric
+- graph.type=uniform
+- model=small
+- model.scale_by_sigma=False
