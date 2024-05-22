@@ -1,4 +1,4 @@
-name: sedd
+name: d3
 channels:
   - nvidia/label/cuda-11.8.0
   - defaults
@@ -149,4 +149,4 @@ dependencies:
     - xxhash==3.4.1
     - yarl==1.9.4
     - flash-attn==2.2.2
-prefix: /home/asarkar/.conda/envs/sedd
+prefix: /home/../.conda/envs/d3
