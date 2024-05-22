@@ -1,5 +1,4 @@
-# Score Entropy Discrete Diffusion
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion
 
 This repo contains a PyTorch implementation for the paper "Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion" (NeurIPS2024 submission).
 
