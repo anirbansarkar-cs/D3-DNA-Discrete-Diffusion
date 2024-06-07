@@ -55,3 +55,7 @@ We can run sampling using a command
 ```
 python run_sample.py --model_path MODEL_PATH --steps STEPS
 ```
+
+### Datasets
+
+We provide preprocessed datasets for [DeepSTARR](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_preprocessed) and [MPRA](https://huggingface.co/datasets/anonymous-3E42/MPRA_preprocessed).
