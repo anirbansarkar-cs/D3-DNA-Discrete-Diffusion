@@ -59,3 +59,14 @@ python run_sample.py --model_path MODEL_PATH --steps STEPS
 ### Datasets
 
 We provide preprocessed datasets for [DeepSTARR](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_preprocessed) and [MPRA](https://huggingface.co/datasets/anonymous-3E42/MPRA_preprocessed).
+
+### Pretrained Models
+
+We provide pretrained models for Promoter, DeepSTARR and MPRA datasets below, each with transformer and convolution architectures.
+
+1. [Promoter with transformer](https://huggingface.co/anonymous-3E42/Promoter_D3_Tran_model)
+2. [Promoter with convolution](https://huggingface.co/anonymous-3E42/Promoter_D3_Conv_model)
+3. [DeepSTARR with transformer](https://huggingface.co/anonymous-3E42/DeepSTARR_D3_Tran_model)
+4. [DeepSTARR with convolution](https://huggingface.co/anonymous-3E42/DeepSTARR_D3_Conv_model)
+5. [MPRA with transformer](https://huggingface.co/anonymous-3E42/MPRA_D3_Tran_model)
+6. [MPRA with convolution](https://huggingface.co/anonymous-3E42/MPRA_D3_Conv_model)
