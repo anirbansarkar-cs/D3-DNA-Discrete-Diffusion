@@ -43,7 +43,7 @@ def get_dataloaders(config, distributed=True):
     valid_set = TensorDataset(X_valid, y_valid)
 
     #MPRA
-    # filepath = os.path.join("/home/asarkar/ddsm/minimal-diffusion/", 'mpra_data.h5')
+    # filepath = os.path.join('mpra_data.h5')
     # dataset = h5py.File(filepath, 'r')
     # x_train = torch.tensor(np.array(dataset['x_train']).astype(np.float32)).permute(0,2,1)
     # x_train = torch.argmax(x_train, dim=1)
