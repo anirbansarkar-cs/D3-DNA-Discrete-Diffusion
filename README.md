@@ -28,7 +28,7 @@ python train.py noise.type=geometric graph.type=uniform model=small model.scale_
 This creates a new directory `direc=exp_local/DATE/TIME` with the following structure (compatible with running sampling experiments locally)
 ```
 ├── direc
-│   ├── .hydra
+│   ├── hydra
 │   │   ├── config.yaml
 │   │   ├── ...
 │   ├── checkpoints
