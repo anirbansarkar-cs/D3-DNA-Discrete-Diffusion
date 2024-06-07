@@ -1,6 +1,6 @@
 # Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion
 
-This repo contains a PyTorch implementation for the paper "Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion" (NeurIPS2024 submission).
+This repo contains a PyTorch implementation for the paper "Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion".
 
 ## Design Choices
 
