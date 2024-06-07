@@ -76,8 +76,13 @@ We provide pretrained models for Promoter, DeepSTARR and MPRA datasets below, ea
 We generate data points conditioned on the same activity levels for every dataset, where we only used test splits. Please find below the links to the generated data sets where D3 trained with transformer and convolution architectures.
 
 1.[Promoter generated samples with D3 transformer](https://huggingface.co/datasets/anonymous-3E42/Promoter_sample_generated_D3_Tran)
+
 2.[Promoter generated samples with D3 convolution](https://huggingface.co/datasets/anonymous-3E42/Promoter_sample_generated_D3_Conv)
+
 3.[DeepSTARR generated samples with D3 transformer](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_sample_generated_D3_Tran)
+
 4.[DeepSTARR generated samples with D3 convolution](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_sample_generated_D3_Conv)
+
 5.[MPRA generated samples with D3 transformer](https://huggingface.co/datasets/anonymous-3E42/MPRA_sample_generated_D3_Tran)
+
 6.[MPRA generated samples with D3 convolution](https://huggingface.co/datasets/anonymous-3E42/MPRA_sample_generated_D3_Conv)
