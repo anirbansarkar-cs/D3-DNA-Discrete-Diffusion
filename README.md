@@ -58,8 +58,10 @@ model.scale_by_sigma      False
 ### Run Sampling
 
 Steps to note before sampling:
-1. Run specific codes to sample sequences for a specific dataset (```run_sample.py``` for deepstarr).
-2. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for downloading SEI features and pretrained models for Promoter dataset.
+1. If you have trained a model, then you should have a folder saved with run timestamp under ```exp_local/"dataset"/``` which contains configuarion files and different checkpoints that can be used for sampling.
+2. If you want to just sample, place the checkpoint file (download links provided below) in ```exp_local/"dataset"/"arch"/checkpoints/``` ("dataset" is either promoter, deepstarr or mpra. "arch" is either Tran or Conv). The configuration files are already provided in the ```exp_local/"dataset"/"arch"/hydra/``` folders which were generated during training.
+4. Run specific codes to sample sequences for a specific dataset (```run_sample.py``` for deepstarr).
+5. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for downloading SEI features and pretrained models for Promoter dataset.
 
 We can run sampling using a command 
 
