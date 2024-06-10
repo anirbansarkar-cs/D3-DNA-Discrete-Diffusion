@@ -68,7 +68,7 @@ We can run sampling using a command
 ```
 python run_sample.py --model_path MODEL_PATH --steps STEPS
 ```
-This will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions and print.
+This will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions.
 
 ### Datasets
 
