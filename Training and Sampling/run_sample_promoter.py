@@ -11,8 +11,12 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset, DistributedSampler
 
-from sei import Sei
-from selene_sdk.utils import NonStrandSpecific
+'''
+Please follow codes from "Dirichlet-flow-matching" (https://github.com/HannesStark/dirichlet-flow-matching) and "Dirichlet diffusion score model" (https://github.com/jzhoulab/ddsm)
+for setting up the code to train for Promoter dataset and run import by uncommenting both the lines below.
+'''
+# from sei import Sei
+# from selene_sdk.utils import NonStrandSpecific
 
 def main():
     parser = argparse.ArgumentParser(description="Generate some samples")
