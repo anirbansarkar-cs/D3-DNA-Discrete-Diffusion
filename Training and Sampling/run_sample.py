@@ -51,7 +51,7 @@ def main():
     val_pred_score = deepstarr.predict_custom(val_pred_seqs.permute(0, 2, 1).to(device))
     sp_mse = (val_score - val_pred_score) ** 2
     mean_sp_mse = torch.mean(sp_mse).cpu()
-    print(f"all-sp-mse {mean_sp_mse}")
+    print(f"Test-sp-mse {mean_sp_mse}")
     np.savez(os.path.join(args.model_path, f"sample_{rank}.npz", ), val_pred_seqs.cpu())
 
 if __name__=="__main__":
