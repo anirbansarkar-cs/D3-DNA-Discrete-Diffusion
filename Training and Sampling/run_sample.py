@@ -7,6 +7,7 @@ from load_model import load_model_local
 import torch.nn.functional as F
 import sampling
 import h5py, os
+import numpy as np
 from torch.utils.data import DataLoader, TensorDataset, DistributedSampler
 
 from PL_DeepSTARR import *
