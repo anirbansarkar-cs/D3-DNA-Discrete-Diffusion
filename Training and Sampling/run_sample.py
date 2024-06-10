@@ -44,7 +44,7 @@ def main():
     
     for _, (batch, val_target) in enumerate(test_ds):
         sample = sampling_fn(model, val_target.to(device))
-        seq_pred_one_hot = torch.nn.functional.one_hot(sample, num_classes=4).float()
+        seq_pred_one_hot = F.one_hot(sample, num_classes=4).float()
         val_pred_seq.append(seq_pred_one_hot)
 
     val_pred_seqs = torch.cat(val_pred_seq, dim=0)
