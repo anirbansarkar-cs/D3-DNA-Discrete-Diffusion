@@ -160,7 +160,7 @@ def _run(rank, world_size, cfg):
             if step % cfg.training.eval_freq == 0:
                 eval_batch = next(eval_iter)
                 eval_inputs, eval_target = eval_batch
-                eval_inputs, eval_target = eval_inputs.to(device), torch.bucketize(eval_target, boundaries).to(device)
+                eval_inputs, eval_target = eval_inputs.to(device), eval_target.to(device)
                 eval_loss = eval_step_fn(state, eval_inputs, eval_target)
 
                 dist.all_reduce(eval_loss)
