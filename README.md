@@ -22,11 +22,11 @@ conda env create -f environment.yml
 which will create a ```d3``` environment with packages installed. Note that this installs with CUDA 11.8, and different CUDA versions must be installed manually. The biggest factor is making sure that the ```torch``` and ```flash-attn``` packages use the same CUDA version (more found [here](https://github.com/Dao-AILab/flash-attention)).
 
 Steps to note before training:
-1. Comment out all the dataset initialization except for the dataset you want to train D3.
-2. Make proper changes in ```configs/config.yaml``` for the dataset selected, such as data:train and data:valid. A folder will be created inside ```exp_local``` accordingly. Change other values according to the requirement.
-3. Inside ```configs/model/small.yaml```, provide proper length value (promoter -> 1024, deepstarr -> 249, mpra -> 200). Keep cond_dim as 128 for transformer and change it to 256 for convolution architecture.
-4. Select proper file for architecture definition through ```model/__init__.py``` according to the selected dataset. (```transformer.py``` file for deepstarr).
-5. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for setting up the code to train for Promoter dataset. Then uncomment the line ```from promoter_dataset import PromoterDataset```.
+1. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for setting up the code to train for Promoter dataset. Then uncomment the line ```from promoter_dataset import PromoterDataset``` in ```data.py```. Start from the next step for other datasets.
+2. Comment out all the dataset initialization except for the dataset you want to train D3 in ```data.py```.
+3. Make proper changes in ```configs/config.yaml``` for the dataset selected, such as data:train and data:valid. A folder will be created inside ```exp_local``` accordingly. Change other values according to the requirement.
+4. Inside ```configs/model/small.yaml```, provide proper length value (promoter -> 1024, deepstarr -> 249, mpra -> 200). Keep cond_dim as 128 for transformer and change it to 256 for convolution architecture.
+5. Select proper file for architecture definition through ```model/__init__.py``` according to the selected dataset. (```transformer.py``` file for deepstarr).
 
 Example training command
 ```
