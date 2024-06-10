@@ -12,9 +12,10 @@ import h5py, os
 from datasets import Dataset
 
 '''
-Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for setting up the code to train for Promoter dataset.
+Please follow codes from "Dirichlet-flow-matching" (https://github.com/HannesStark/dirichlet-flow-matching) and "Dirichlet diffusion score model" (https://github.com/jzhoulab/ddsm)
+for setting up the code to train for Promoter dataset and run import by uncommenting below line.
 '''
-from promoter_dataset import PromoterDataset
+# from promoter_dataset import PromoterDataset
 
 from torch.utils.data import DataLoader, TensorDataset, DistributedSampler
 
