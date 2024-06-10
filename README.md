@@ -1,6 +1,6 @@
 # Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion
 
-This repo contains a PyTorch implementation for the paper "Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion".
+This repo contains a PyTorch implementation for the paper "Designing DNA With Tunable Regulatory Activity Using Discrete Diffusion". The training and sampling part of the code is inspired by [Score entropy discrete diffusion](https://github.com/louaaron/Score-Entropy-Discrete-Diffusion).
 
 ## Design Choices
 
