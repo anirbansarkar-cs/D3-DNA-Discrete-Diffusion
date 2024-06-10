@@ -44,7 +44,7 @@ def main():
     sampling_fn = sampling.get_pc_sampler(
             graph, noise, (batch.shape[0], 249), 'analytic', args.steps, device=device
         )
-    ##########
+    ########## Keep until this point for DeepSTARR
 
     #MPRA
     #########
@@ -65,7 +65,7 @@ def main():
     # sampling_fn = sampling.get_pc_sampler(
     #         graph, noise, (batch.shape[0], 200), 'analytic', args.steps, device=device
     #     )
-    #########
+    ######### Keep until this point for MPRA
     
     for _, (batch, val_target) in enumerate(test_ds):
         sample = sampling_fn(model, val_target.to(device))
