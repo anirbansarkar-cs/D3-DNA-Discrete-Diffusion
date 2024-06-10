@@ -64,7 +64,7 @@ hydra:
     max_num_timeout: 100000
     # timeout_min: 10079
     partition: g40x
-    account: stanford
+    account: null
     mem_gb: 96
     cpus_per_task: 40
     gpus_per_node: ${ngpus}
