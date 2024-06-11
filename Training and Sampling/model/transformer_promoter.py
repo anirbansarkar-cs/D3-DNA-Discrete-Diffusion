@@ -335,7 +335,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         )
 
     def forward(self, indices, labels, train, sigma):
-        
+        #---------------------------------------------#
         # Below line for transformer
         x = self.vocab_embed(indices, labels)
         c = F.silu(self.sigma_map(sigma))# + self.label_embed(labels, train))
@@ -344,10 +344,10 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             for i in range(len(self.blocks)):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
-            # print (x.shape)
             x = self.output_layer(x, c)
             
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1])) #Transformer
+        #---------------------------------------------#
 
         #Below lines for convolutions
         # x = torch.nn.functional.one_hot(indices, num_classes=4).float()
@@ -363,5 +363,6 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         #
         # out = self.final(out)
         # x = out.permute(0, 2, 1)
+        #---------------------------------------------#
 
         return x
