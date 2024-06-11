@@ -142,7 +142,14 @@ def _run(rank, world_size, cfg):
         step = state['step']
 
         batch = next(train_iter)#.to(device)
-        inputs, target = batch
+
+        #Select lines for input and target seclection based on choice of dataset
+        inputs, target = batch #Specific for DeepSTARR and MPRA
+
+        # seq_one_hot = batch[:, :, :4] #Specific for Promoter
+        # inputs = torch.argmax(seq_one_hot, dim=-1) #Specific for Promoter
+        # target = batch[:, :, 4:5] #Specific for Promoter
+        
         inputs, target = inputs.to(device), target.to(device)
         loss = train_step_fn(state, inputs, target)
 
