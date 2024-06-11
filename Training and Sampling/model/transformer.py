@@ -336,7 +336,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
     def forward(self, indices, labels, train, sigma):
         # ---------------------------------------------#
-        # Uncomment below for original transformer based networks
+        # Below code for transformer based networks
         x = self.vocab_embed(indices, labels)
         c = F.silu(self.sigma_map(sigma))# + self.label_embed(labels, train))
         rotary_cos_sin = self.rotary_emb(x)
@@ -350,7 +350,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
 
         #---------------------------------------------#
-        # Uncomment below for convolution based networks
+        # Comment out the above section and uncomment below for convolution based networks
         # x = torch.nn.functional.one_hot(indices, num_classes=4).float()
         # label = torch.unsqueeze(self.label_emb(labels), dim=2)
         # x = torch.cat([x, label], dim=-1)
