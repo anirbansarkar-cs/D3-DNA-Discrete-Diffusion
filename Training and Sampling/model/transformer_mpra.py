@@ -340,7 +340,8 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         )
 
     def forward(self, indices, labels, train, sigma):
-        # Uncomment below for original transformer based networks
+        #---------------------------------------------#
+        # Below code for transformer based networks
         x = self.vocab_embed(indices, labels)
         c = F.silu(self.sigma_map(sigma))# + self.label_embed(labels, train))
         rotary_cos_sin = self.rotary_emb(x)
@@ -351,30 +352,17 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
             x = self.output_layer(x, c)
 
-        if self.scale_by_sigma:
-            assert self.absorb, "Haven't configured this to work."
-            esigm1_log = torch.where(sigma < 0.5, torch.expm1(sigma), sigma.exp() - 1).log().to(x.dtype)[:, None, None]
-            x = x - esigm1_log - np.log(x.shape[-1] - 1)  # this will be approximately averaged at 0
-
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
+        #---------------------------------------------#
 
-        # Uncomment below for convolution based networks
+        # Comment out the above section and uncomment below for convolution based networks
         # x = torch.nn.functional.one_hot(indices, num_classes=4).float()
-        # # print (x.shape)
-        # # print (labels.shape)
         # label = torch.unsqueeze(self.label_emb(labels), dim=2)
-        # # print (label.shape)
         # x = torch.cat([x, label], dim=-1)
         # x = x.permute(0, 2, 1)
-        # # print(out.shape)
         # out = self.act(self.linear(x))
-        # # print (self.sigma_map(sigma).shape)
-        # # print ("Hello")
-        # # print (out.shape)
-        # # print (self.label_embed(labels, train).shape)
         #
         # c = F.silu(self.sigma_map(sigma))  # + self.label_embed(labels, train))
-        # # print (c.shape)
         #
         # for block, dense, norm in zip(self.conv_blocks, self.denses, self.norms):
         #     h = self.act(block(norm(out + dense(c)[:, :, None])))
@@ -385,5 +373,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         #
         # x = self.final(out)
         # x = x.permute(0, 2, 1)
+        
+        #---------------------------------------------#
 
         return x
