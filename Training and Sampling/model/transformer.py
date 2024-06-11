@@ -282,8 +282,8 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         #Below code is for convolution
         n = 256
         embed_dim = 256
-        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
-                                   nn.Linear(embed_dim, embed_dim))
+        # self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+        #                            nn.Linear(embed_dim, embed_dim))
         self.linear = nn.Conv1d(vocab_size + 1, n, kernel_size=9, padding=4)
         # self.linear = nn.Conv1d(vocab_size + 1, n, kernel_size=7, padding='same')
         self.conv_blocks = nn.ModuleList([nn.Conv1d(n, n, kernel_size=9, padding=4),
@@ -351,23 +351,24 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
         #---------------------------------------------#
         # Uncomment below for convolution based networks
-        x = torch.nn.functional.one_hot(indices, num_classes=4).float()
-        label = torch.unsqueeze(self.label_emb(labels), dim=2)
-        x = torch.cat([x, label], dim=-1)
-        x = x.permute(0, 2, 1)
-        out = self.act(self.linear(x))
+        # x = torch.nn.functional.one_hot(indices, num_classes=4).float()
+        # label = torch.unsqueeze(self.label_emb(labels), dim=2)
+        # x = torch.cat([x, label], dim=-1)
+        # x = x.permute(0, 2, 1)
+        # out = self.act(self.linear(x))
 
-        #Label embedding is not required in our case
-        c = F.silu(self.sigma_map(sigma))  # + self.label_embed(labels, train))
+        # #Label embedding is not required in our case
+        # c = F.silu(self.sigma_map(sigma))  # + self.label_embed(labels, train))
 
-        for block, dense, norm in zip(self.conv_blocks, self.denses, self.norms):
-            h = self.act(block(norm(out + dense(c)[:, :, None])))
-            if h.shape == out.shape:
-                out = h + out
-            else:
-                out = h
+        # for block, dense, norm in zip(self.conv_blocks, self.denses, self.norms):
+        #     h = self.act(block(norm(out + dense(c)[:, :, None])))
+        #     if h.shape == out.shape:
+        #         out = h + out
+        #     else:
+        #         out = h
 
-        x = self.final(out)
-        x = x.permute(0, 2, 1)
+        # x = self.final(out)
+        # x = x.permute(0, 2, 1)
+        #---------------------------------------------#
 
         return x
