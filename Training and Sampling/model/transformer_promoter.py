@@ -335,23 +335,10 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         )
 
     def forward(self, indices, labels, train, sigma):
+        
         # Below line for transformer
         x = self.vocab_embed(indices, labels)
-
-        #Below lines for convolutions
-        # x = torch.nn.functional.one_hot(indices, num_classes=4).float()
-        # # print (x.shape, labels.shape)
-        # # labels = torch.unsqueeze(self.label_emb(labels), dim=2) #for deepstarr only
-        # x = torch.cat([x, labels], dim=-1)
-        # out = x.permute(0, 2, 1)
-        # # print (out.shape)
-        # out = self.linear(out)
-        # out = self.act(out)
-
         c = F.silu(self.sigma_map(sigma))# + self.label_embed(labels, train))
-        # print (c.shape)
-
-        #Transformer blocks
         rotary_cos_sin = self.rotary_emb(x)
 
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -359,8 +346,14 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
             # print (x.shape)
             x = self.output_layer(x, c)
+            
+        x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1])) #Transformer
 
-        #Conv blocks
+        #Below lines for convolutions
+        # x = torch.nn.functional.one_hot(indices, num_classes=4).float()
+        # # labels = torch.unsqueeze(self.label_emb(labels), dim=2) #for deepstarr only
+        # x = torch.cat([x, labels], dim=-1)
+        # out = x.permute(0, 2, 1)
         # for block, dense, norm in zip(self.conv_blocks, self.denses, self.norms):
         #     h = self.act(block(norm(out + dense(c)[:, :, None])))
         #     if h.shape == out.shape:
@@ -370,14 +363,5 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         #
         # out = self.final(out)
         # x = out.permute(0, 2, 1)
-
-        if self.scale_by_sigma:
-            assert self.absorb, "Haven't configured this to work."
-            esigm1_log = torch.where(sigma < 0.5, torch.expm1(sigma), sigma.exp() - 1).log().to(x.dtype)[:, None, None]
-            x = x - esigm1_log - np.log(x.shape[-1] - 1)  # this will be approximately averaged at 0
-
-        x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1])) #Transformer
-        # x = torch.scatter(out, -1, indices[..., None], torch.zeros_like(out[..., :1])) #Conv (out in place of x)
-        # print (x.shape)
 
         return x
