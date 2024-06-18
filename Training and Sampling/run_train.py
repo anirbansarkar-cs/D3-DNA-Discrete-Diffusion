@@ -183,17 +183,17 @@ def _run(rank, world_size, cfg):
                     utils.save_checkpoint(os.path.join(
                         checkpoint_dir, f'checkpoint_{save_step}.pth'), state)
 
-                # Generate and save samples
+                # Save EMA model
                 if cfg.training.snapshot_sampling:
-                    mprint(f"Generating text at step: {step}")
+                    # mprint(f"Generating text at step: {step}")
 
-                    this_sample_dir = os.path.join(sample_dir, "iter_{}".format(step))
-                    utils.makedirs(this_sample_dir)
+                    # this_sample_dir = os.path.join(sample_dir, "iter_{}".format(step))
+                    # utils.makedirs(this_sample_dir)
 
                     ema.store(score_model.parameters())
                     ema.copy_to(score_model.parameters())
                     ema.restore(score_model.parameters())
 
-                    np.savez(os.path.join(this_sample_dir, f"sample_{rank}.npz",), val_pred_seqs.cpu())
+                    # np.savez(os.path.join(this_sample_dir, f"sample_{rank}.npz",), val_pred_seqs.cpu())
 
                     dist.barrier()
