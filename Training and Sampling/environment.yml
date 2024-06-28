@@ -150,4 +150,4 @@ dependencies:
     - pytorch-lightning
     - h5py
     - pandas
-prefix: /home/../.conda/envs/d3
+prefix: /home/<username>/.conda/envs/d3
