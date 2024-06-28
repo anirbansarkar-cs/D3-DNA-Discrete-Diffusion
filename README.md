@@ -19,7 +19,7 @@ Simply run
 conda env create -f environment.yml
 ```
 
-which will create a ```d3``` environment with packages installed. Note that this installs with CUDA 11.8, and different CUDA versions must be installed manually. Activate ```d3 ``` and install torch with below command
+which will create a ```d3``` environment with packages installed (please provide your server username in place of ```<username>```). Note that this installs with CUDA 11.8, and different CUDA versions must be installed manually. Activate ```d3 ``` and install torch with below command
 
 ```
 pip install torch==2.0.1+cu117 torchvision==0.15.2+cu117 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu117
