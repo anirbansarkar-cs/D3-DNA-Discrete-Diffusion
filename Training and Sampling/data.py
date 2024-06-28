@@ -1,5 +1,5 @@
 import re
-from datasets import load_dataset
+# from datasets import load_dataset
 from itertools import chain
 import numpy as np
 import torch
@@ -9,7 +9,7 @@ import zipfile
 import requests
 import json
 import h5py, os
-from datasets import Dataset
+# from datasets import Dataset
 
 '''
 Please follow codes from "Dirichlet-flow-matching" (https://github.com/HannesStark/dirichlet-flow-matching) and "Dirichlet diffusion score model" (https://github.com/jzhoulab/ddsm)
