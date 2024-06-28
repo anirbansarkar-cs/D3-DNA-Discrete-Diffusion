@@ -148,4 +148,5 @@ dependencies:
     - flash-attn==2.2.2
     - scikit-learn
     - pytorch-lightning
+    - h5py
 prefix: /home/../.conda/envs/d3
