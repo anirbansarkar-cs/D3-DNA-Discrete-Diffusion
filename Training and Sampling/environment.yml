@@ -149,4 +149,5 @@ dependencies:
     - scikit-learn
     - pytorch-lightning
     - h5py
+    - pandas
 prefix: /home/../.conda/envs/d3
