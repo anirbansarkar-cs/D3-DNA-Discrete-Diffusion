@@ -7,7 +7,7 @@ import math
 from einops import rearrange
 from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 # from flash_attn.ops.fused_dense import FusedMLP, FusedDense
-from huggingface_hub import PyTorchModelHubMixin
+# from huggingface_hub import PyTorchModelHubMixin
 from omegaconf import OmegaConf
 
 from . import rotary
@@ -252,7 +252,7 @@ class Dense(nn.Module):
     def forward(self, x):
         return self.dense(x)[...]
 
-class SEDD(nn.Module, PyTorchModelHubMixin):
+class SEDD(nn.Module):
     def __init__(self, config):
         super().__init__()
 
