@@ -19,10 +19,15 @@ Simply run
 conda env create -f environment.yml
 ```
 
-which will create a ```d3``` environment with packages installed. Note that this installs with CUDA 11.8, and different CUDA versions must be installed manually. The biggest factor is making sure that the ```torch``` and ```flash-attn``` packages use the same CUDA version (more found [here](https://github.com/Dao-AILab/flash-attention)).
+which will create a ```d3``` environment with packages installed. Note that this installs with CUDA 11.8, and different CUDA versions must be installed manually. Activate ```d3 ``` and install torch with below command
+
+```
+pip install torch==2.0.1+cu117 torchvision==0.15.2+cu117 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu117
+```
+Please install other packages as required (may not have installed from ```environment.yml```).
 
 Steps to note before training:
-1. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for setting up the code to train for Promoter dataset. Then uncomment the line ```from promoter_dataset import PromoterDataset``` in ```data.py```. Start from the next step for other datasets.
+1. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for setting up the code to train for Promoter dataset. Then uncomment the line ```from promoter_dataset import PromoterDataset``` in ```data.py```. Ignore this step for other datasets.
 2. Comment out all the dataset initialization except for the dataset you want to train D3 in ```data.py```.
 3. Make proper changes in ```configs/config.yaml``` for the dataset selected, such as data:train and data:valid. A folder will be created inside ```exp_local``` accordingly. Change other values according to the requirement.
 4. Inside ```configs/model/small.yaml```, provide proper length value (promoter -> 1024, deepstarr -> 249, mpra -> 200). Keep cond_dim as 128 for transformer and change it to 256 for convolution architecture.
