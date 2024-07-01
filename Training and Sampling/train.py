@@ -15,7 +15,7 @@ from omegaconf import OmegaConf, open_dict
 def main(cfg):
     ngpus = cfg.ngpus
     if "load_dir" in cfg:
-        hydra_cfg_path = os.path.join(cfg.load_dir, ".hydra/hydra.yaml")
+        hydra_cfg_path = os.path.join(cfg.load_dir, "hydra/hydra.yaml")
         hydra_cfg = OmegaConf.load(hydra_cfg_path).hydra
 
         cfg = utils.load_hydra_config_from_run(cfg.load_dir)
