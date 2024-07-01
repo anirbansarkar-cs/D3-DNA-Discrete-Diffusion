@@ -56,7 +56,7 @@ def main():
     all_sp_mse = []
     val_pred_seq = []
     sampling_fn = sampling.get_pc_sampler(
-        graph, noise, (batch.shape[0], 1024), 'analytic', args.steps, device=device
+        graph, noise, (batch_size, 1024), 'analytic', args.steps, device=device
     )
 
     for _, (batch) in enumerate(test_loader):
