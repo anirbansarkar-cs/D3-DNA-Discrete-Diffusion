@@ -42,7 +42,7 @@ def main():
 
     val_pred_seq = []
     sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (batch.shape[0], 249), 'analytic', args.steps, device=device
+            graph, noise, (batch_size, 249), 'analytic', args.steps, device=device
         )
     ########## Keep until this point for DeepSTARR
 
