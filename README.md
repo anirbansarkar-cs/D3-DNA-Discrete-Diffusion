@@ -75,9 +75,9 @@ python run_sample.py --model_path MODEL_PATH --steps STEPS
 ```
 This will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions.
 
-### Datasets
+### Datasets and Oracles
 
-We provide preprocessed datasets for [DeepSTARR](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_preprocessed) and [MPRA](https://huggingface.co/datasets/anonymous-3E42/MPRA_preprocessed).
+We provide preprocessed datasets for [DeepSTARR](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_preprocessed), [MPRA](https://huggingface.co/datasets/anonymous-3E42/MPRA_preprocessed) and oracle models at [DeepSTARR](https://huggingface.co/datasets/anonymous-3E42/DeepSTARR_oracle), [MPRA](https://huggingface.co/datasets/anonymous-3E42/MPRA_oracle).
 
 ### Pretrained Models
 
