@@ -75,7 +75,7 @@ We can run sampling using a command
 ```
 python run_sample.py --model_path MODEL_PATH --steps STEPS
 ```
-The ```model_path``` argument should point to ```exp_local/"dataset"/"arch"/``` folder. This will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions.
+The ```model_path``` argument should point to ```exp_local/"dataset"/"arch"/``` folder. If you trained a D3 model, the folder should be ```exp_local/"dataset"/${now:%Y.%m.%d}/${now:%H%M%S}```, which should already be created during training. In any case, this will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions.
 
 ### Datasets and Oracles
 
