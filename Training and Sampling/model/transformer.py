@@ -240,6 +240,22 @@ class DDitFinalLayer(nn.Module):
         return x
 
 
+class GaussianFourierProjection(nn.Module):
+    """
+    Gaussian random features for encoding time steps.
+    """
+
+    def __init__(self, embed_dim, scale=30.):
+        super().__init__()
+        # Randomly sample weights during initialization. These weights are fixed
+        # during optimization and are not trainable.
+        self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+
+    def forward(self, x):
+        x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+
 class Dense(nn.Module):
     """
     A fully connected layer that reshapes outputs to feature maps.
@@ -282,8 +298,8 @@ class SEDD(nn.Module):
         #Below code is for convolution
         n = 256
         embed_dim = 256
-        # self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
-        #                            nn.Linear(embed_dim, embed_dim))
+        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+                                   nn.Linear(embed_dim, embed_dim))
         self.linear = nn.Conv1d(vocab_size + 1, n, kernel_size=9, padding=4)
         # self.linear = nn.Conv1d(vocab_size + 1, n, kernel_size=7, padding='same')
         self.conv_blocks = nn.ModuleList([nn.Conv1d(n, n, kernel_size=9, padding=4),
