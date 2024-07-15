@@ -13,7 +13,7 @@ This codebase is built modularly to promote future research (as opposed to a mor
 
 ## Installation
 
-Simply run
+All the training and sampling related codes for D3 are in ```train_n_sample``` folder. Please navigate there and simply run
 
 ```
 conda env create -f environment.yml
