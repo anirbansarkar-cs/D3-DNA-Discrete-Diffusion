@@ -64,8 +64,9 @@ model.scale_by_sigma      False
 
 Steps to note before sampling:
 1. If you have trained a model, then you should have a folder saved with run timestamp under ```exp_local/"dataset"/``` which contains configuarion files and different checkpoints that can be used for sampling.
-2. If you want to just sample, place the checkpoint file (download links provided below) in ```exp_local/"dataset"/"arch"/checkpoints/``` ("dataset" is either promoter, deepstarr or mpra. "arch" is either Tran or Conv). The configuration files are already provided in the ```exp_local/"dataset"/"arch"/hydra/``` folders which were generated during training.
-4. Run specific codes to sample sequences for a specific dataset. (```run_sample.py``` works by default for DeepSTARR, and requires spefici changed for MPRA. ```run_sample_promoter.py``` works for Promoter.)
+2. If you want to just sample, place the checkpoint file (download links provided below) in ```exp_local/"dataset"/"arch"/checkpoints/``` ("dataset" is either promoter, deepstarr or mpra. "arch" is either Tran or Conv). Please create a folder named ```checkpoints``` under ```exp_local/"dataset"/"arch"/```, where you need to place the trained D3 models (download links are provided below) and change the file name accordingly in ```load_model.py```(line 26).
+3. The configuration files are already provided in the ```exp_local/"dataset"/"arch"/hydra/``` folders which were generated during training and can be used directly for sampling.
+4. Run specific codes to sample sequences for a specific dataset. (```run_sample.py``` works by default for DeepSTARR, and requires specific changes for MPRA. ```run_sample_promoter.py``` works for Promoter).
 5. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for downloading SEI features and pretrained models for Promoter dataset.
 
 We can run sampling using a command 
@@ -73,7 +74,7 @@ We can run sampling using a command
 ```
 python run_sample.py --model_path MODEL_PATH --steps STEPS
 ```
-This will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions.
+The ```model_path``` argument should point to ```exp_local/"dataset"/"arch"/``` folder. This will generate samples for all the true test activity levels and store them in the model path. Also it will calculate the mse (between true test vs generated) through the oracle predictions.
 
 ### Datasets and Oracles
 
