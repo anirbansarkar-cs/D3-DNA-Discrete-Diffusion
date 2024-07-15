@@ -298,6 +298,8 @@ class SEDD(nn.Module):
         #Below code is for convolution
         n = 256
         embed_dim = 256
+        #Please comment out below line (self.embed) for convolution architecture. This has nothing to do with the model.
+        #But was trained with this line, so should be kept for transformer architecture to avoid any key mismatch error.
         self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
                                    nn.Linear(embed_dim, embed_dim))
         self.linear = nn.Conv1d(vocab_size + 1, n, kernel_size=9, padding=4)
