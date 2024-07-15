@@ -42,7 +42,7 @@ def main():
 
     val_pred_seq = []
     sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (batch_size, 249), 'analytic', args.steps, device=device
+            graph, noise, (args.batch_size, 249), 'analytic', args.steps, device=device
         )
     ########## Keep until this point for DeepSTARR
 
@@ -68,6 +68,10 @@ def main():
     ######### Keep until this point for MPRA
     
     for _, (batch, val_target) in enumerate(test_ds):
+        if batch.shape[0] != args.batch_size:
+            sampling_fn = sampling.get_pc_sampler(
+                graph, noise, (batch.shape[0], 249), 'analytic', args.steps, device=device
+            )
         sample = sampling_fn(model, val_target.to(device))
         seq_pred_one_hot = F.one_hot(sample, num_classes=4).float()
         val_pred_seq.append(seq_pred_one_hot)
@@ -85,7 +89,7 @@ def main():
     sp_mse = (val_score - val_pred_score) ** 2
     mean_sp_mse = torch.mean(sp_mse).cpu()
     print(f"Test-sp-mse {mean_sp_mse}")
-    np.savez(os.path.join(args.model_path, f"sample_{rank}.npz", ), val_pred_seqs.cpu())
+    np.savez(os.path.join(args.model_path, f"sample.npz", ), val_pred_seqs.cpu())
 
 if __name__=="__main__":
     main()
