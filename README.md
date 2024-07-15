@@ -66,8 +66,9 @@ Steps to note before sampling:
 1. If you have trained a model, then you should have a folder saved with run timestamp under ```exp_local/"dataset"/``` which contains configuarion files and different checkpoints that can be used for sampling.
 2. If you want to just sample, place the checkpoint file (download links provided below) in ```exp_local/"dataset"/"arch"/checkpoints/``` ("dataset" is either promoter, deepstarr or mpra. "arch" is either Tran or Conv). Please create a folder named ```checkpoints``` under ```exp_local/"dataset"/"arch"/``` and update the file name accordingly in ```load_model.py```(line 26).
 3. The configuration files are already provided in the ```exp_local/"dataset"/"arch"/hydra/``` folders which were generated during training and can be used directly for sampling.
-4. Run specific codes to sample sequences for a specific dataset. (```run_sample.py``` works by default for DeepSTARR, and requires specific changes for MPRA. ```run_sample_promoter.py``` works for Promoter).
+4. Please download the oracle models for DeepSTARR, MPRA (download links provided below) to be used for MSE calculation.
 5. Please follow codes from [Dirichlet-flow-matching](https://github.com/HannesStark/dirichlet-flow-matching) and [Dirichlet diffusion score model](https://github.com/jzhoulab/ddsm) for downloading SEI features and pretrained models for Promoter dataset.
+6. Run specific codes to sample sequences for a specific dataset. (```run_sample.py``` works by default for DeepSTARR, and requires specific changes for MPRA. ```run_sample_promoter.py``` works for Promoter).
 
 We can run sampling using a command 
 
