@@ -19,8 +19,8 @@ training:
   ema: 0.9999
 
 data:
-  train: promoter
-  valid: promoter
+  train: deepstarr
+  valid: deepstarr
   cache_dir: data
 
 graph:
