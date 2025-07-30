@@ -66,10 +66,6 @@ def load_hydra_config_from_run(load_dir):
     return cfg
 
 
-def makedirs(dirname):
-    os.makedirs(dirname, exist_ok=True)
-
-
 def get_logger(logpath, package_files=[], displaying=True, saving=True, debug=False):
     logger = logging.getLogger()
     if debug:
@@ -103,7 +99,7 @@ def get_logger(logpath, package_files=[], displaying=True, saving=True, debug=Fa
 
 def restore_checkpoint(ckpt_dir, state, device):
     if not os.path.exists(ckpt_dir):
-        makedirs(os.path.dirname(ckpt_dir))
+        os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
         logging.warning(f"No checkpoint found at {ckpt_dir}. Returned the same state as input")
         return state
     else:

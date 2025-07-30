@@ -54,7 +54,7 @@ eval:
 
 # SP-MSE validation configuration
 sp_mse_validation:
-  enabled: false  # Set to true to enable SP-MSE validation during training
+  enabled: true  # Set to true to enable SP-MSE validation during training
   validation_freq_epochs: 4  # Frequency in epochs to run SP-MSE validation
   validation_samples: 1000  # Number of samples from validation set (0 = use all)
   oracle_path: null  # Path to oracle model (auto-resolved if null)
@@ -91,11 +91,11 @@ model:
 wandb:
   enabled: true
   project: d3-dna-diffusion
-  name: deepstarr-tran
+  name: deepstarr-tran-sp-mse
   entity: d3-cshl
   tags: []
   notes: ""
-  id: "j465slsx"
+  # id: "j465slsx"
 
 # Paths - provide full paths
 paths:

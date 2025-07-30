@@ -31,7 +31,7 @@ from model.ema import ExponentialMovingAverage
 from utils import losses
 from utils import graph_lib
 from utils import noise_lib
-from utils.utils import get_score_fn, load_hydra_config_from_run, makedirs, get_logger
+from utils.utils import get_score_fn, load_hydra_config_from_run, get_logger
 
 
 class BaseD3LightningModule(pl.LightningModule):
@@ -372,7 +372,7 @@ class BaseTrainer:
     def setup_logging(self):
         """Setup logging configuration."""
         log_dir = os.path.join(self.work_dir, "logs")
-        makedirs(log_dir)
+        os.makedirs(log_dir, exist_ok=True)
         
         loggers = []
         
@@ -471,7 +471,7 @@ class BaseTrainer:
     def train(self, resume_from: Optional[str] = None):
         """Main training method."""
         # Create work directory
-        makedirs(self.work_dir)
+        os.makedirs(self.work_dir, exist_ok=True)
         
         # Create Lightning components
         lightning_module = self.create_lightning_module()
@@ -492,7 +492,6 @@ class BaseTrainer:
         
         print(f"Training completed. Results saved to: {self.work_dir}")
         return trainer, lightning_module
-
 
 def parse_base_args():
     """Parse common command line arguments for training scripts."""
