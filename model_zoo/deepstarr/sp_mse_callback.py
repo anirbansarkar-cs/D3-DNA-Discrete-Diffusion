@@ -109,7 +109,7 @@ def create_deepstarr_sp_mse_callback(cfg, dataset_name: str = 'deepstarr'):
     return DeepSTARRSPMSECallback(
         oracle_path=oracle_path,
         data_path=data_path,
-        validation_freq=sp_mse_cfg.get('validation_freq', 5000),
+        validation_freq_epochs=sp_mse_cfg.get('validation_freq_epochs', 4),
         validation_samples=sp_mse_cfg.get('validation_samples', 1000),
         enabled=sp_mse_cfg.get('enabled', False),
         sampling_steps=sp_mse_cfg.get('sampling_steps'),

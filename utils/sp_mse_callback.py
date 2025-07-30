@@ -23,7 +23,7 @@ class BaseSPMSEValidationCallback(Callback, ABC):
         self,
         oracle_path: str,
         data_path: str,
-        validation_freq: int = 5000,
+        validation_freq_epochs: int = 4,
         validation_samples: int = 1000,
         enabled: bool = True,
         sampling_steps: Optional[int] = None,
@@ -33,7 +33,7 @@ class BaseSPMSEValidationCallback(Callback, ABC):
         Args:
             oracle_path: Path to oracle model checkpoint
             data_path: Path to dataset file
-            validation_freq: Frequency in training steps to run SP-MSE validation
+            validation_freq_epochs: Frequency in epochs to run SP-MSE validation
             validation_samples: Number of samples to use from validation set (subsampling)
             enabled: Whether SP-MSE validation is enabled
             sampling_steps: Number of sampling steps (defaults to sequence length)
@@ -42,7 +42,7 @@ class BaseSPMSEValidationCallback(Callback, ABC):
         super().__init__()
         self.oracle_path = oracle_path
         self.data_path = data_path
-        self.validation_freq = validation_freq
+        self.validation_freq_epochs = validation_freq_epochs
         self.validation_samples = validation_samples
         self.enabled = enabled
         self.sampling_steps = sampling_steps
@@ -115,22 +115,19 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                 print(f"SP-MSE Callback: Failed to load oracle model, disabling callback")
                 self.enabled = False
     
-    def on_train_batch_end(
+    def on_train_epoch_end(
         self, 
         trainer: Trainer, 
-        pl_module: LightningModule, 
-        outputs: Any, 
-        batch: Any, 
-        batch_idx: int
+        pl_module: LightningModule
     ) -> None:
         """Check if it's time to run SP-MSE validation"""
         if not self.enabled or self.oracle_model is None:
             return
             
-        global_step = trainer.global_step
+        current_epoch = trainer.current_epoch
         
         # Check if it's time for SP-MSE validation
-        if global_step > 0 and global_step % self.validation_freq == 0:
+        if current_epoch > 0 and current_epoch % self.validation_freq_epochs == 0:
             self._run_sp_mse_validation(trainer, pl_module)
     
     def _get_validation_data(self, trainer: Trainer):
@@ -236,8 +233,13 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                         os.remove(self.best_checkpoint_path)
                         # print(f"Removed previous best SP-MSE checkpoint: {self.best_checkpoint_path}")
                     
-                    # Save new best checkpoint in checkpoints directory
-                    checkpoints_dir = os.path.join(trainer.default_root_dir, "checkpoints")
+                    # Save new best checkpoint in checkpoints directory (matching normal checkpoint location)
+                    # Use logger's save_dir to match the work_dir used in normal checkpoint saving
+                    if hasattr(trainer.logger, 'save_dir') and trainer.logger.save_dir:
+                        work_dir = trainer.logger.save_dir
+                    else:
+                        work_dir = trainer.default_root_dir
+                    checkpoints_dir = os.path.join(work_dir, "checkpoints")
                     os.makedirs(checkpoints_dir, exist_ok=True)
                     
                     checkpoint_filename = f"sp-mse_{mean_sp_mse:.6f}_step_{trainer.global_step}.ckpt"
