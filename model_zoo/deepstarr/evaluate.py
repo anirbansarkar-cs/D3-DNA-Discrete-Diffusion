@@ -12,6 +12,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from utils.utils import update_cfg_with_unknown_args
 from omegaconf import OmegaConf
 from typing import Optional
 from tqdm import tqdm
@@ -136,6 +137,12 @@ def main():
             return 1
     
     config = OmegaConf.load(args.config)
+
+    # override paths.data_file with args.data_path if provided
+    if args.data_path:
+        config.paths.data_file = args.data_path
+        print(f"Overriding paths.data_file with {args.data_path}")
+
     evaluator = DeepSTARREvaluator()
     
     # Run evaluation (always includes sampling + SP-MSE computation)
