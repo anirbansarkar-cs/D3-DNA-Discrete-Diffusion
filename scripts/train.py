@@ -360,7 +360,34 @@ class BaseTrainer:
         else:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             self.work_dir = f"experiments/{dataset_name}/{timestamp}"
-        
+    
+    def _extract_timestamp_from_checkpoint(self, checkpoint_path: str) -> Optional[str]:
+        """Extract timestamp from checkpoint path if it follows expected format."""
+        path_parts = Path(checkpoint_path).parts
+        # Look for pattern: experiments/{dataset}/{timestamp}/checkpoints/...
+        try:
+            exp_idx = path_parts.index('experiments')
+            if (exp_idx + 3 < len(path_parts) and 
+                path_parts[exp_idx + 1] == self.dataset_name and
+                path_parts[exp_idx + 3] == 'checkpoints'):
+                return path_parts[exp_idx + 2]  # This should be the timestamp
+        except (ValueError, IndexError):
+            pass
+        return None
+    
+    def _update_work_dir_for_resume(self, resume_from: str):
+        """Update work_dir to reuse existing directory if resuming from a checkpoint."""
+        if not resume_from or not os.path.exists(resume_from):
+            return
+            
+        timestamp = self._extract_timestamp_from_checkpoint(resume_from)
+        if timestamp:
+            # Reuse the existing timestamp directory
+            self.work_dir = f"experiments/{self.dataset_name}/{timestamp}"
+            print(f"Reusing existing work directory: {self.work_dir}")
+        else:
+            print(f"Could not extract timestamp from checkpoint path, using new directory: {self.work_dir}")
+    
     def create_lightning_module(self) -> BaseD3LightningModule:
         """Create the Lightning module. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement create_lightning_module()")
@@ -470,6 +497,10 @@ class BaseTrainer:
     
     def train(self, resume_from: Optional[str] = None):
         """Main training method."""
+        # Update work directory if resuming from checkpoint
+        if resume_from:
+            self._update_work_dir_for_resume(resume_from)
+            
         # Create work directory
         os.makedirs(self.work_dir, exist_ok=True)
         

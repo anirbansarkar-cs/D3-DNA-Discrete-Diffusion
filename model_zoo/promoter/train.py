@@ -62,8 +62,8 @@ class PromoterDataModule(BaseD3DataModule):
         
     def setup(self, stage: str = None):
         """Setup Promoter datasets."""
-        # Use Promoter-specific data loading
-        self.train_ds, self.val_ds = get_promoter_datasets()
+        # Use Promoter-specific data loading with data_file from config
+        self.train_ds, self.val_ds, _ = get_promoter_datasets(self.cfg.paths.data_file)
         print(f"Promoter dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
 
 

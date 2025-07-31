@@ -99,5 +99,6 @@ wandb:
 # Paths - provide full paths
 paths:
   data_file: "model_zoo/promoter/Promoter_data.npz"
-  oracle_model: "model_zoo/promoter/oracle_models/oracle_promoter_promoter_data.ckpt"
+  oracle_model: "model_zoo/promoter/oracle_models/best.sei.model.pth.tar"
+  sei_features: "model_zoo/promoter/oracle_models/target.sei.names"
   checkpoints_dir: "checkpoints"

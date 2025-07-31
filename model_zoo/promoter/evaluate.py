@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
 from typing import Optional
 from tqdm import tqdm
+import pandas as pd
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -24,6 +25,19 @@ sys.path.insert(0, str(project_root))
 from scripts.evaluate import BaseEvaluator, parse_base_args, main_evaluate
 from model_zoo.promoter.data import get_promoter_datasets
 from model_zoo.promoter.sei import Sei, NonStrandSpecific
+
+
+def upgrade_state_dict(state_dict, prefixes):
+    """Upgrade state dict by removing prefixes."""
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        new_key = key
+        for prefix in prefixes:
+            if key.startswith(prefix):
+                new_key = key[len(prefix):]
+                break
+        new_state_dict[new_key] = value
+    return new_state_dict
 
 
 class PromoterEvaluator(BaseEvaluator):
@@ -74,14 +88,15 @@ class PromoterEvaluator(BaseEvaluator):
     def load_oracle_model(self, oracle_checkpoint: str, data_path: str):
         """Load Promoter oracle model (Sei)."""
         try:
-            # Load Sei oracle model
-            oracle = Sei(sequence_length=1024, n_targets=21907)
-            oracle = NonStrandSpecific(oracle)
+            # Load Sei oracle model with proper architecture
+            sei_model = Sei(4096, 21907)  # 4096 seq length, 21907 features
+            oracle = NonStrandSpecific(sei_model)
             
             # Load checkpoint if provided
             if oracle_checkpoint and os.path.exists(oracle_checkpoint):
                 checkpoint = torch.load(oracle_checkpoint, map_location=self.device)
-                oracle.load_state_dict(checkpoint)
+                state_dict = upgrade_state_dict(checkpoint['state_dict'], prefixes=['module.'])
+                oracle.load_state_dict(state_dict, strict=False)
             
             oracle.to(self.device)
             oracle.eval()
@@ -92,6 +107,74 @@ class PromoterEvaluator(BaseEvaluator):
         except Exception as e:
             print(f"Failed to load Promoter oracle model: {e}")
             return None
+    
+    def compute_sp_mse(self, sampled_sequences: torch.Tensor, oracle_model, 
+                       original_data: torch.Tensor) -> float:
+        """
+        Compute SP-MSE using Promoter SEI oracle model with proper inference pattern.
+        
+        Args:
+            sampled_sequences: Generated sequences (batch_size, seq_length, 4) one-hot
+            oracle_model: Loaded SEI oracle model 
+            original_data: Original test sequences for comparison
+            
+        Returns:
+            Mean SP-MSE value
+        """
+        # Load SEI features for H3K4me3 filtering
+        if not hasattr(self, 'sei_features'):
+            try:
+                sei_features_path = 'model_zoo/promoter/oracle_models/target.sei.names'
+                self.sei_features = pd.read_csv(sei_features_path, sep='|', header=None)
+            except:
+                print("Warning: Could not load SEI features file, using all features")
+                self.sei_features = None
+        
+        # Get oracle predictions for original and generated data using proper SEI inference
+        val_score = self._get_sei_profile(original_data, oracle_model)
+        val_pred_score = self._get_sei_profile(sampled_sequences, oracle_model)
+        
+        # Compute SP-MSE
+        sp_mse = (val_score - val_pred_score) ** 2
+        mean_sp_mse = torch.mean(torch.tensor(sp_mse)).cpu().item()
+        
+        return mean_sp_mse
+    
+    def _get_sei_profile(self, seq_one_hot, oracle_model):
+        """
+        Get SEI profile following the proper inference pattern.
+        
+        Args:
+            seq_one_hot: One-hot encoded sequences (batch_size, seq_length, 4)
+            oracle_model: SEI oracle model
+            
+        Returns:
+            H3K4me3 predictions (batch_size,)
+        """
+        B, L, K = seq_one_hot.shape
+        seq_one_hot = seq_one_hot.cpu()
+        
+        # Pad sequence to 4096 length as expected by SEI
+        # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
+        sei_inp = torch.cat([
+            torch.ones((B, 4, 1536)) * 0.25,
+            seq_one_hot.transpose(1, 2),  # Convert to (batch, channels, length)
+            torch.ones((B, 4, 1536)) * 0.25
+        ], 2).to(self.device)  # batchsize x 4 x 4,096
+        
+        # Get SEI predictions
+        with torch.no_grad():
+            sei_out = oracle_model(sei_inp).cpu().detach().numpy()  # batchsize x 21,907
+        
+        # Filter for H3K4me3 features if SEI features are available
+        if self.sei_features is not None:
+            h3k4me3_mask = self.sei_features[1].str.strip().values == 'H3K4me3'
+            sei_out = sei_out[:, h3k4me3_mask]  # batchsize x 2,350 (H3K4me3 features)
+        
+        # Take mean across H3K4me3 features
+        predh3k4me3 = sei_out.mean(axis=1)  # batchsize
+        
+        return predh3k4me3
     
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
         """Get original test data for SP-MSE comparison."""

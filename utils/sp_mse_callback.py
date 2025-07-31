@@ -204,24 +204,9 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                 sp_mse = (val_score - generated_score) ** 2
                 mean_sp_mse = torch.mean(sp_mse).cpu().item()
                 
-                # Log metrics to all loggers (including WandB)
-                if trainer.logger:
-                    # Handle multiple loggers (TensorBoard and WandB)
-                    if hasattr(trainer.logger, 'experiment'):
-                        # Single logger
-                        trainer.logger.log_metrics({
-                            'sp_mse/validation': mean_sp_mse,
-                            'sp_mse/best': self.best_sp_mse
-                        }, step=trainer.global_step)
-                    else:
-                        # Multiple loggers (LoggerCollection)
-                        for logger in trainer.logger:
-                            logger.log_metrics({
-                                'sp_mse/validation': mean_sp_mse,
-                                'sp_mse/best': self.best_sp_mse
-                            }, step=trainer.global_step)
-                
-                print(f"Step {trainer.global_step}: SP-MSE = {mean_sp_mse:.6f}, Best = {self.best_sp_mse:.6f}")
+                # Log metrics using Lightning module's log method (automatically handles all loggers)
+                pl_module.log('sp_mse/validation', mean_sp_mse, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+                pl_module.log('sp_mse/best', self.best_sp_mse, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
                 
                 # Check if this is the best SP-MSE
                 if mean_sp_mse < self.best_sp_mse:

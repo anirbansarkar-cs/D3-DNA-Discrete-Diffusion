@@ -23,26 +23,26 @@ class PromoterDataset(Dataset):
     regulatory activity labels.
     """
     
-    def __init__(self, npz_file_path: str, split: str = 'train'):
+    def __init__(self, data_file: str, split: str = 'train'):
         """
         Initialize the Promoter dataset.
         
         Args:
-            npz_file_path: Path to the Promoter NPZ data file
+            data_file: Path to the Promoter NPZ data file
             split: Dataset split ('train', 'valid', 'test')
         """
-        self.npz_file_path = npz_file_path
+        self.data_file = data_file
         self.split = split.lower()
         
-        if not os.path.exists(npz_file_path):
-            raise FileNotFoundError(f"Promoter data file not found: {npz_file_path}")
+        if not os.path.exists(data_file):
+            raise FileNotFoundError(f"Promoter data file not found: {data_file}")
         
         # Load and preprocess data
         self.X, self.y = self._load_data()
         
     def _load_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Load and preprocess data from NPZ file."""
-        promo_data = np.load(self.npz_file_path)
+        promo_data = np.load(self.data_file)
         
         # Determine which split to load
         if self.split == 'train':
@@ -76,19 +76,19 @@ class PromoterDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def get_promoter_datasets(npz_file_path: str) -> Tuple[Dataset, Dataset, Dataset]:
+def get_promoter_datasets(data_file: str) -> Tuple[Dataset, Dataset, Dataset]:
     """
     Get Promoter train, validation, and test datasets.
     
     Args:
-        npz_file_path: Path to the Promoter NPZ data file
+        data_file: Path to the Promoter NPZ data file
         
     Returns:
         Tuple of (train_dataset, valid_dataset, test_dataset)
     """
-    train_set = PromoterDataset(npz_file_path, split='train')
-    valid_set = PromoterDataset(npz_file_path, split='valid')
-    test_set = PromoterDataset(npz_file_path, split='test')
+    train_set = PromoterDataset(data_file, split='train')
+    valid_set = PromoterDataset(data_file, split='valid')
+    test_set = PromoterDataset(data_file, split='test')
     
     return train_set, valid_set, test_set
 
