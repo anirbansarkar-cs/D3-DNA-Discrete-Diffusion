@@ -93,7 +93,7 @@ wandb:
   enabled: false
   project: d3-dna-diffusion
   name: promoter-convolutional
-  entity: null
+  entity: d3-cshl
   tags: []
   notes: ""
 

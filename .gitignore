@@ -33,3 +33,7 @@ experiments/
 evaluation_results/
 npz_to_h5_converter.py
 slurm_outputs/
+
+ckpt_to_pth.py
+convert_checkpoint.py
+run_sample.py

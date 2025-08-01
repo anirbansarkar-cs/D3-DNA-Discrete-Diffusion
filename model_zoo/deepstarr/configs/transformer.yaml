@@ -51,6 +51,7 @@ eval:
   batch_size: 256
   perplexity: false
   perplexity_batch_size: 32
+  use_evoaug_oracle: false  # Set to true to use EvoAug-trained oracle model
 
 # SP-MSE validation configuration
 sp_mse_validation:
@@ -95,10 +96,10 @@ wandb:
   entity: d3-cshl
   tags: []
   notes: ""
-  # id: "j465slsx"
+  # id: "vvd1880a"
 
 # Paths - provide full paths
 paths:
   data_file: "model_zoo/deepstarr/DeepSTARR_data.h5"
-  oracle_model: "model_zoo/deepstarr/oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt"
+  oracle_model: "model_zoo/deepstarr/oracle_models/DeepSTARR_combo1_finetune_2.ckpt"
   checkpoints_dir: "checkpoints"

@@ -20,13 +20,20 @@ class DeepSTARRSPMSECallback(BaseSPMSEValidationCallback):
         return 249
     
     def load_oracle_model(self):
-        """Load DeepSTARR oracle model."""
+        """Load DeepSTARR oracle model (EvoAug or standard)."""
         try:
-            oracle = PL_DeepSTARR.load_from_checkpoint(
-                self.oracle_path, 
-                input_h5_file=self.data_path
-            ).eval()
-            return oracle
+            # Check if this is an EvoAug oracle path
+            if hasattr(self, 'use_evoaug_oracle') and self.use_evoaug_oracle:
+                from model_zoo.deepstarr.deepstarr import load_evoaug_oracle_model
+                oracle = load_evoaug_oracle_model(self.oracle_path, device='cpu')
+                return oracle
+            else:
+                # Standard Lightning checkpoint loading
+                oracle = PL_DeepSTARR.load_from_checkpoint(
+                    self.oracle_path, 
+                    input_h5_file=self.data_path
+                ).eval()
+                return oracle
         except Exception as e:
             print(f"Failed to load DeepSTARR oracle model: {e}")
             return None
@@ -60,7 +67,12 @@ class DeepSTARRSPMSECallback(BaseSPMSEValidationCallback):
         
         # Get oracle predictions
         with torch.no_grad():
-            predictions = self.oracle_model.predict_custom(sequences_input)
+            if hasattr(self, 'use_evoaug_oracle') and self.use_evoaug_oracle:
+                # For EvoAug models, call forward directly
+                predictions = self.oracle_model(sequences_input)
+            else:
+                # For Lightning models, use predict_custom method
+                predictions = self.oracle_model.predict_custom(sequences_input)
         
         return predictions
     
@@ -97,16 +109,25 @@ def create_deepstarr_sp_mse_callback(cfg, dataset_name: str = 'deepstarr'):
     
     sp_mse_cfg = cfg.sp_mse_validation
     
+    # Check if EvoAug oracle should be used (from eval config)
+    use_evoaug_oracle = getattr(cfg.eval, 'use_evoaug_oracle', False)
+    
     # Auto-resolve paths if not provided
     oracle_path = sp_mse_cfg.get('oracle_path')
     if oracle_path is None:
-        oracle_path = 'model_zoo/deepstarr/oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
+        if hasattr(cfg, 'paths') and hasattr(cfg.paths, 'oracle_model'):
+            oracle_path = cfg.paths.oracle_model
+        else:
+            oracle_path = 'model_zoo/deepstarr/oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
     
     data_path = sp_mse_cfg.get('data_path')
     if data_path is None:
-        data_path = 'model_zoo/deepstarr/DeepSTARR_data.h5'
+        if hasattr(cfg, 'paths') and hasattr(cfg.paths, 'data_file'):
+            data_path = cfg.paths.data_file
+        else:
+            data_path = 'model_zoo/deepstarr/DeepSTARR_data.h5'
     
-    return DeepSTARRSPMSECallback(
+    callback = DeepSTARRSPMSECallback(
         oracle_path=oracle_path,
         data_path=data_path,
         validation_freq_epochs=sp_mse_cfg.get('validation_freq_epochs', 4),
@@ -115,3 +136,13 @@ def create_deepstarr_sp_mse_callback(cfg, dataset_name: str = 'deepstarr'):
         sampling_steps=sp_mse_cfg.get('sampling_steps'),
         early_stopping_patience=sp_mse_cfg.get('early_stopping_patience')
     )
+    
+    # Set EvoAug oracle flag
+    callback.use_evoaug_oracle = use_evoaug_oracle
+    
+    if use_evoaug_oracle:
+        print(f"✓ SP-MSE callback configured to use EvoAug oracle: {oracle_path}")
+    else:
+        print(f"✓ SP-MSE callback configured to use standard oracle: {oracle_path}")
+    
+    return callback

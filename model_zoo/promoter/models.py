@@ -7,10 +7,26 @@ These handle the dataset-specific signal preprocessing and model instantiation.
 
 import os
 import torch
+import math
 from omegaconf import DictConfig
 from typing import Tuple, Any
 from model.transformer import TransformerModel, create_transformer_model
 from model.cnn import ConvolutionalModel, create_convolutional_model
+
+
+class PromoterEmbeddingLayer(torch.nn.Module):
+    """Promoter-specific embedding layer that matches the original implementation."""
+    
+    def __init__(self, dim, vocab_dim):
+        super().__init__()
+        self.embedding = torch.nn.Parameter(torch.empty((vocab_dim, dim)))
+        self.signal_embedding = torch.nn.Linear(1, dim)  # Promoter uses signal_dim=1
+        torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
+
+    def forward(self, x, y):
+        vocab_embed = self.embedding[x]
+        signal_embed = self.signal_embedding(y)
+        return torch.add(vocab_embed, signal_embed)
 
 
 class PromoterTransformerModel(TransformerModel):
@@ -26,6 +42,10 @@ class PromoterTransformerModel(TransformerModel):
         config.dataset.sequence_length = 1024
         
         super().__init__(config)
+        
+        # Replace the vocab_embed with promoter-specific version
+        vocab_size = config.tokens + (1 if getattr(config.graph, 'type', '') == 'absorb' else 0)
+        self.vocab_embed = PromoterEmbeddingLayer(config.model.hidden_size, vocab_size)
 
 
 class PromoterConvolutionalModel(ConvolutionalModel):

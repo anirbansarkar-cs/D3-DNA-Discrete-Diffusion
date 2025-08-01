@@ -6,7 +6,7 @@ dataset:
   signal_dim: 1
 
 # Hardware configuration
-ngpus: 1
+ngpus: 2
 nnodes: 1
 tokens: 4
 
@@ -89,10 +89,10 @@ model:
 
 # Logging configuration (optional)
 wandb:
-  enabled: false
+  enabled: true
   project: d3-dna-diffusion
   name: promoter-transformer
-  entity: null
+  entity: d3-cshl
   tags: []
   notes: ""
 

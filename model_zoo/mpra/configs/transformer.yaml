@@ -92,7 +92,7 @@ wandb:
   enabled: false
   project: d3-dna-diffusion
   name: mpra-transformer
-  entity: null
+  entity: d3-cshl
   tags: []
   notes: ""
 

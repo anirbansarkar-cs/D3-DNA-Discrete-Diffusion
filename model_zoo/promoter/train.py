@@ -38,20 +38,16 @@ class PromoterLightningModule(BaseD3LightningModule):
         """
         Process Promoter batch data.
         
-        Promoter data comes as concatenated (sequence + target) tensors.
-        Shape: (batch_size, seq_length, 5) where last dim is [A, C, G, T, target]
+        Promoter data comes as (sequences, targets) tuple from the dataset.
+        Sequences are already converted to indices, targets are the regulatory labels.
         """
-        if batch.dim() == 3 and batch.shape[-1] == 5:
-            # Extract sequence (first 4 channels) and target (last channel)
-            seq_one_hot = batch[:, :, :4]
-            target = batch[:, :, 4:5]
-            
-            # Convert one-hot to indices for model input
-            inputs = torch.argmax(seq_one_hot, dim=-1)
-            
-            return inputs, target
+        if isinstance(batch, (list, tuple)) and len(batch) == 2:
+            sequences, targets = batch
+            # Sequences are already token indices from the dataset
+            # Targets are the regulatory activity labels
+            return sequences, targets
         else:
-            raise ValueError(f"Expected shape (batch_size, seq_length, 5), got {batch.shape}")
+            raise ValueError(f"Expected (sequences, targets) tuple, got {type(batch)}")
 
 
 class PromoterDataModule(BaseD3DataModule):

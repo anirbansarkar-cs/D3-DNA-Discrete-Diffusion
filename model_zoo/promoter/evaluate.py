@@ -73,9 +73,7 @@ class PromoterEvaluator(BaseEvaluator):
             
         # Use config batch size if not specified
         if batch_size is None:
-            batch_size = getattr(config, 'batch_size', 32)
-            if hasattr(config, 'eval') and hasattr(config.eval, 'batch_size'):
-                batch_size = config.eval.batch_size
+            batch_size = getattr(config.eval, 'batch_size', 32)
             
         return DataLoader(
             dataset,

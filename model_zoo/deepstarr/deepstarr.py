@@ -399,6 +399,263 @@ class PL_DeepSTARR(pl.LightningModule):
 
 
 # =============================================================================
+# EvoAug Integration
+# =============================================================================
+
+def create_evoaug_augmentation_list():
+    """Create augmentation list with specified hyperparameters for DeepSTARR."""
+    try:
+        from evoaug import augment
+    except ImportError:
+        print("EvoAug not installed. Please install with: pip install evoaug")
+        return []
+    
+    augment_list = [
+        augment.RandomMutation(mutate_frac=0.05),
+        augment.RandomTranslocation(shift_min=0, shift_max=20),
+        augment.RandomInsertion(insert_min=0, insert_max=20),
+        augment.RandomDeletion(delete_min=0, delete_max=30),
+        # augment.RandomRC(rc_prob=0.0),  # Disabled as specified
+        augment.RandomNoise(noise_mean=0, noise_std=0.3),
+    ]
+    
+    return augment_list
+
+
+def load_evoaug_oracle_model(oracle_path: str, device: str = 'cuda') -> DeepSTARR:
+    """
+    Load EvoAug oracle model from checkpoint.
+    
+    Args:
+        oracle_path: Path to the oracle model checkpoint
+        device: Device to load model on
+        
+    Returns:
+        Loaded DeepSTARR model
+    """
+    try:
+        # Try loading as EvoAug checkpoint first
+        import evoaug
+        model = DeepSTARR(output_dim=2)
+        robust_model = evoaug.RobustModel(model, criterion=None, optimizer=None, augment_list=[])
+        robust_model = evoaug.load_model_from_checkpoint(robust_model, oracle_path)
+        oracle_model = robust_model.model.to(device)
+        oracle_model.eval()
+        print(f"✓ Loaded EvoAug oracle model from {oracle_path}")
+        return oracle_model
+        
+    except Exception as e:
+        print(f"Could not load as EvoAug checkpoint: {e}")
+        # Fallback to regular checkpoint loading
+        model = DeepSTARR(output_dim=2)
+        checkpoint = torch.load(oracle_path, map_location=device)
+        
+        if 'state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['state_dict'], strict=False)
+        else:
+            model.load_state_dict(checkpoint, strict=False)
+        
+        model.to(device)
+        model.eval()
+        print(f"✓ Loaded oracle model from {oracle_path}")
+        return model
+
+
+def training_with_evoaug(chosen_model: str, chosen_dataset: str,
+                        use_evoaug: bool = True,
+                        max_epochs: int = 100,
+                        patience: int = 10,
+                        finetune_epochs: int = 10,
+                        finetune: bool = True,
+                        verbose: bool = False, 
+                        wanted_wandb: bool = False,
+                        seed: int = 42) -> Dict[str, np.ndarray]:
+    """Train DeepSTARR model with EvoAug augmentations.
+    
+    Args:
+        chosen_model: Name of the model ('DeepSTARR')
+        chosen_dataset: Name of the dataset ('DeepSTARR_data')
+        use_evoaug: Whether to use EvoAug augmentations
+        max_epochs: Maximum training epochs
+        patience: Early stopping patience
+        finetune_epochs: Fine-tuning epochs
+        finetune: Whether to fine-tune after training
+        verbose: Whether to print verbose output
+        wanted_wandb: Whether to use Weights & Biases logging
+        seed: Random seed
+        
+    Returns:
+        Dictionary containing evaluation metrics
+    """
+    
+    # Import required libraries
+    try:
+        import evoaug
+        from evoaug_analysis import utils
+    except ImportError as e:
+        print(f"EvoAug not installed. Please install with: pip install evoaug evoaug_analysis")
+        raise e
+    
+    # Set random seeds for reproducibility
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    print(f"Training DeepSTARR with {'EvoAug' if use_evoaug else 'standard'} augmentations...")
+    
+    # Setup data module
+    data_path = f'./{chosen_dataset}.h5'
+    batch_size = 100  # Following the example
+    data_module = utils.H5DataModule(data_path, batch_size=batch_size, lower_case=False, transpose=False)
+    
+    # Create model
+    model = DeepSTARR(output_dim=2, d=256)
+    
+    # Setup loss and optimizer
+    loss = nn.MSELoss()
+    optimizer_dict = utils.configure_optimizer(
+        model,
+        lr=0.001,
+        weight_decay=1e-6,
+        decay_factor=0.1,
+        patience=5,
+        monitor='val_loss'
+    )
+    
+    # Create augmentation list
+    augment_list = create_evoaug_augmentation_list() if use_evoaug else []
+    
+    # Create robust model
+    robust_model = evoaug.RobustModel(
+        model,
+        criterion=loss,
+        optimizer=optimizer_dict,
+        augment_list=augment_list,
+        max_augs_per_seq=2,  # As specified for DeepSTARR
+        hard_aug=True,
+        finetune=False,
+        inference_aug=False
+    )
+    
+    # Setup trainer
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    aug_suffix = "_evoaug" if use_evoaug else "_standard"
+    work_dir = f"experiments/deepstarr{aug_suffix}/{timestamp}"
+    os.makedirs(work_dir, exist_ok=True)
+    
+    ckpt_path = os.path.join(work_dir, f"deepstarr{aug_suffix}")
+    callback_topmodel = pl.callbacks.ModelCheckpoint(
+        monitor='val_loss',
+        save_top_k=1,
+        dirpath=work_dir,
+        filename=os.path.basename(ckpt_path)
+    )
+    
+    callback_es = pl.callbacks.early_stopping.EarlyStopping(
+        monitor='val_loss', 
+        patience=patience
+    )
+    
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        logger=None,
+        callbacks=[callback_es, callback_topmodel],
+        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        devices=1
+    )
+    
+    # Train model
+    print("Starting training...")
+    trainer.fit(robust_model, datamodule=data_module)
+    
+    # Load best model
+    ckpt_file = ckpt_path + ".ckpt"
+    if os.path.exists(ckpt_file):
+        robust_model = evoaug.load_model_from_checkpoint(robust_model, ckpt_file)
+        print(f"✓ Loaded best model from {ckpt_file}")
+    
+    # Fine-tune if requested
+    if finetune and use_evoaug:
+        print("Starting fine-tuning phase...")
+        
+        # Setup fine-tune optimizer
+        finetune_optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=0.0001,
+            weight_decay=1e-6
+        )
+        
+        # Switch to fine-tune mode
+        robust_model.finetune_mode(optimizer=finetune_optimizer)
+        
+        # Setup trainer for fine-tuning
+        ckpt_finetune_path = os.path.join(work_dir, "deepstarr_finetune")
+        callback_topmodel = pl.callbacks.ModelCheckpoint(
+            monitor='val_loss',
+            save_top_k=1,
+            dirpath=work_dir,
+            filename=os.path.basename(ckpt_finetune_path)
+        )
+        
+        trainer = pl.Trainer(
+            max_epochs=finetune_epochs,
+            logger=None,
+            callbacks=[callback_topmodel],
+            accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+            devices=1
+        )
+        
+        # Fine-tune
+        trainer.fit(robust_model, datamodule=data_module)
+        
+        # Load best fine-tuned model
+        finetune_ckpt = ckpt_finetune_path + ".ckpt"
+        if os.path.exists(finetune_ckpt):
+            robust_model = evoaug.load_model_from_checkpoint(robust_model, finetune_ckpt)
+            print(f"✓ Loaded best fine-tuned model from {finetune_ckpt}")
+    
+    # Evaluate model
+    print("Evaluating model...")
+    pred = utils.get_predictions(robust_model, data_module.x_test, batch_size=100)
+    results = utils.evaluate_model(data_module.y_test, pred, task='regression')
+    
+    # Calculate correlations
+    y_true = data_module.y_test
+    y_score = pred
+    
+    print('\nPearson r:')
+    pearson_vals = []
+    for class_index in range(y_true.shape[-1]):
+        r = stats.pearsonr(y_true[:, class_index], y_score[:, class_index])[0]
+        pearson_vals.append(r)
+    print(np.array(pearson_vals))
+    
+    print('\nSpearman rho:')
+    spearman_vals = []
+    for class_index in range(y_true.shape[-1]):
+        rho = stats.spearmanr(y_true[:, class_index], y_score[:, class_index])[0]
+        spearman_vals.append(rho)
+    print(np.array(spearman_vals))
+    
+    # Save results
+    results_dict = {
+        'Spearman': spearman_vals,
+        'PCC': pearson_vals,
+        'full_results': results
+    }
+    
+    results_path = os.path.join(work_dir, 'evaluation_results.pt')
+    torch.save(results_dict, results_path)
+    print(f"✓ Saved evaluation results to {results_path}")
+    print(f"✓ Training completed. Results saved to: {work_dir}")
+    
+    return results_dict
+
+
+# =============================================================================
 # Training Functions
 # =============================================================================
 
