@@ -7,17 +7,13 @@ inheriting from the base training classes and implementing MPRA-specific
 model creation and data loading.
 """
 
-import os
 import sys
 from pathlib import Path
-import datetime
-
 
 # Package imports
-
 from scripts.train import BaseD3LightningModule, BaseD3DataModule, BaseTrainer, parse_base_args
 from model_zoo.mpra.models import create_model
-from model_zoo.mpra.data import get_mpra_datasets, get_mpra_dataloaders
+from model_zoo.mpra.data import get_mpra_datasets
 from model_zoo.mpra.sp_mse_callback import create_mpra_sp_mse_callback
 from omegaconf import OmegaConf
 
@@ -51,48 +47,10 @@ class MPRADataModule(BaseD3DataModule):
         
     def setup(self, stage: str = None):
         """Setup MPRA datasets."""
+        _ = stage  # Unused parameter, required by Lightning interface
         # Use MPRA-specific data loading
         self.train_ds, self.val_ds = get_mpra_datasets()
         print(f"MPRA dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
-    
-    def train_dataloader(self):
-        """Create training dataloader with distributed sampler support."""
-        from torch.utils.data import DataLoader, DistributedSampler
-        
-        # Use distributed sampler if training in distributed mode
-        sampler = None
-        shuffle = True
-        if self.cfg.ngpus > 1:
-            sampler = DistributedSampler(self.train_ds)
-            shuffle = False  # Don't shuffle when using DistributedSampler
-        
-        return DataLoader(
-            self.train_ds,
-            batch_size=self.cfg.training.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
-            sampler=sampler,
-            num_workers=4,
-            pin_memory=True,
-            shuffle=shuffle,
-            persistent_workers=True,
-        )
-    
-    def val_dataloader(self):
-        """Create validation dataloader with distributed sampler support."""
-        from torch.utils.data import DataLoader, DistributedSampler
-        
-        # Use distributed sampler if training in distributed mode
-        sampler = None
-        if self.cfg.ngpus > 1:
-            sampler = DistributedSampler(self.val_ds, shuffle=False)
-        
-        return DataLoader(
-            self.val_ds,
-            batch_size=self.cfg.eval.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
-            sampler=sampler,
-            num_workers=4,
-            pin_memory=True,
-            shuffle=False,
-        )
 
 
 class MPRATrainer(BaseTrainer):

@@ -322,23 +322,39 @@ class BaseD3DataModule(pl.LightningDataModule):
     
     def train_dataloader(self):
         """Create training dataloader."""
-        from torch.utils.data import DataLoader
+        from torch.utils.data import DataLoader, DistributedSampler
+        
+        # Use distributed sampler if training with multiple GPUs
+        sampler = None
+        shuffle = True
+        if self.cfg.ngpus > 1:
+            sampler = DistributedSampler(self.train_ds)
+            shuffle = False  # Don't shuffle when using DistributedSampler
+        
         return DataLoader(
             self.train_ds,
             batch_size=self.cfg.training.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
-            num_workers=2,
+            sampler=sampler,
+            num_workers=4,
             pin_memory=True,
-            shuffle=True,
+            shuffle=shuffle,
             persistent_workers=True,
         )
     
     def val_dataloader(self):
         """Create validation dataloader."""
-        from torch.utils.data import DataLoader
+        from torch.utils.data import DataLoader, DistributedSampler
+        
+        # Use distributed sampler if training with multiple GPUs  
+        sampler = None
+        if self.cfg.ngpus > 1:
+            sampler = DistributedSampler(self.val_ds, shuffle=False)
+        
         return DataLoader(
             self.val_ds,
             batch_size=self.cfg.eval.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
-            num_workers=2,
+            sampler=sampler,
+            num_workers=4,
             pin_memory=True,
             shuffle=False,
         )
