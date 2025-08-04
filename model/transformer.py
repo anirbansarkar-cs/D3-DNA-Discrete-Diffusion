@@ -215,7 +215,7 @@ class TransformerModel(nn.Module):
         self.scale_by_sigma = getattr(config.model, 'scale_by_sigma', False)
 
     def forward(self, indices: torch.Tensor, labels: Optional[torch.Tensor] = None, 
-                train: bool = True, sigma: torch.Tensor, layer_idx: Optional[int] = None = None) -> torch.Tensor:
+                train: bool = True, sigma: Optional[torch.Tensor] = None, layer_idx: Optional[int] = None) -> torch.Tensor:
         """
         Forward pass through the transformer.
         
