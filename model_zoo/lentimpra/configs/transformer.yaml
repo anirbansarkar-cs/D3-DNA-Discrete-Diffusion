@@ -1,9 +1,9 @@
-# Promoter Dataset - Transformer Architecture Configuration
+# LentIMPRA Dataset - Transformer Architecture Configuration
 dataset:
-  name: promoter
-  sequence_length: 1024
+  name: lentimpra
+  sequence_length: 230
   num_classes: 4
-  signal_dim: 1
+  signal_dim: 1  # Single regression target
 
 # Hardware configuration
 ngpus: 2
@@ -12,7 +12,7 @@ tokens: 4
 
 # Training configuration
 training:
-  batch_size: 128
+  batch_size: 256
   accum: 1
   max_epochs: 300
   checkpoint_every_n_epochs: 4
@@ -24,8 +24,8 @@ training:
 
 # Data configuration
 data:
-  train: promoter
-  valid: promoter
+  train: lentimpra
+  valid: lentimpra
   cache_dir: data
 
 # Graph configuration
@@ -48,18 +48,18 @@ sampling:
 
 # Evaluation configuration
 eval:
-  batch_size: 512
+  batch_size: 256
   perplexity: false
   perplexity_batch_size: 32
 
 # SP-MSE validation configuration
 sp_mse_validation:
-  enabled: false  # Set to true to enable SP-MSE validation during training
+  enabled: true  # Set to true to enable SP-MSE validation during training
   validation_freq_epochs: 4  # Frequency in epochs to run SP-MSE validation
   validation_samples: 1000  # Number of samples from validation set (0 = use all)
   oracle_path: null  # Path to oracle model (auto-resolved if null)
   data_path: null  # Path to dataset file (auto-resolved if null)
-  sampling_steps: null  # Number of sampling steps (auto-resolved if null)
+  sampling_steps: 50  # Number of sampling steps (auto-resolved if null)
   early_stopping_patience: null  # Stop training if no improvement for N validations (null = disabled)
 
 # Optimization configuration
@@ -68,7 +68,7 @@ optim:
   optimizer: AdamW
   lr: 0.0003
   beta1: 0.9
-  beta2: 0.999
+  beta2: 0.999 
   eps: 1.0e-08
   warmup: 2500
   grad_clip: 1.0
@@ -80,7 +80,7 @@ model:
   architecture: transformer
   hidden_size: 768
   cond_dim: 128
-  length: 1024
+  length: 230
   n_blocks: 12
   n_heads: 12
   scale_by_sigma: false
@@ -90,15 +90,14 @@ model:
 # Logging configuration (optional)
 wandb:
   enabled: true
-  project: d3-promoter
-  name: promoter-transformer
+  project: d3-lentimpra
+  name: lentimpra-transformer
   entity: d3-cshl
   tags: []
   notes: ""
 
-# Paths - provide full paths
+# Paths - provide full paths to your data and oracle model
 paths:
-  data_file: "model_zoo/promoter/Promoter_data.npz"
-  oracle_model: "model_zoo/promoter/oracle_models/best.sei.model.pth.tar"
-  sei_features: "model_zoo/promoter/oracle_models/target.sei.names"
+  data_file: "model_zoo/lentimpra/lenti_MPRA_K562_data.h5"  # User must specify their data file
+  oracle_model: "model_zoo/lentimpra/oracle_models/best_model-epoch=24-val_pearson=0.814.ckpt"
   checkpoints_dir: "checkpoints"

@@ -84,7 +84,7 @@ model:
 # Logging configuration (optional)
 wandb:
   enabled: false
-  project: d3-dna-diffusion
+  project: d3-ccre-vep
   name: ccre-conv
   entity: d3-cshl
   tags: []

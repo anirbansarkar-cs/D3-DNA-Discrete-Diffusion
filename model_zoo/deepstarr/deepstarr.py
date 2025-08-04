@@ -23,7 +23,7 @@ import tqdm
 from filelock import FileLock
 from typing import Any, Dict, Optional
 from sklearn.metrics import roc_auc_score, average_precision_score
-
+from pathlib import Path
 
 class DeepSTARR(nn.Module):
     """DeepSTARR model from de Almeida et al., 2022; 
@@ -813,29 +813,110 @@ def training_with_PL(chosen_model: str, chosen_dataset: str,
 
 
 if __name__ == '__main__':
-    """Main execution for training DeepSTARR oracle model."""
+    """Main execution for DeepSTARR oracle model inference."""
     
-    # Define model-dataset pairs
-    pairlist = [['DeepSTARR', 'DeepSTARR_data']]
+    # Configuration
+    chosen_model = 'DeepSTARR'
+    chosen_dataset = 'DeepSTARR_data'
+    data_path = f'./{chosen_dataset}.h5'
+    checkpoint_path = '../../../../../shared/d3_oracle/oracle_DeepSTARR_DeepSTARR_data.ckpt' # 'oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
     
-    for pair in pairlist:
-        chosen_model, chosen_dataset = pair
+    print("DeepSTARR Oracle Model Inference")
+    print("=" * 40)
+    print("Configuration:")
+    print(f"  Model: {chosen_model}")
+    print(f"  Dataset: {chosen_dataset}")
+    print(f"  Data path: {data_path}")
+    print(f"  Checkpoint: {checkpoint_path}")
+    
+    # Check if data file exists
+    if Path(data_path).exists():
+        print(f"\nData file found: {data_path}")
         
         # Suppress Lightning logs
         import logging
         logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
         
-        # Train model
-        metrics = training_with_PL(
-            chosen_model, 
-            chosen_dataset, 
-            initial_test=True, 
-            mcdropout_test=False, 
-            verbose=False, 
-            wanted_wandb=False
-        )
-        
-        print("\n" + "="*50)
-        print("TRAINING COMPLETED")
-        print(f"Final metrics: {metrics}")
-        print("="*50)
+        # Check if checkpoint exists
+        if Path(checkpoint_path).exists():
+            print(f"Checkpoint found: {checkpoint_path}")
+            
+            # Load pre-trained model
+            try:
+                model = PL_DeepSTARR(input_h5_file=data_path, initial_ds=True)
+                checkpoint = torch.load(checkpoint_path, map_location='cpu')
+                model.load_state_dict(checkpoint['state_dict'], strict=False)
+                model.eval()
+                print("✓ Loaded pre-trained model from checkpoint")
+                
+                # Get test data
+                print(f"\nTest data shape: {model.X_test.shape}")
+                print(f"Test labels shape: {model.y_test.shape}")
+                
+                # Make predictions
+                print("Making predictions...")
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                model = model.to(device)
+                
+                # Move test data to the same device as the model
+                X_test_device = model.X_test.to(device)
+                
+                y_score = model.predict_custom(X_test_device)
+                y_true = model.y_test
+                
+                print(f"Predictions shape: {y_score.shape}")
+                print(f"Targets shape: {y_true.shape}")
+                
+                # Calculate metrics using the model's built-in metrics function
+                metrics_dict = model.metrics(y_score.cpu(), y_true.cpu())
+                
+                # Extract correlations
+                pearson_vals = metrics_dict['PCC'] 
+                spearman_vals = metrics_dict['Spearman']
+                
+                print(f"\n" + "="*50)
+                print("INFERENCE RESULTS")
+                print("="*50)
+                print(f"Pearson correlations: {pearson_vals}")
+                print(f"Mean Pearson r: {pearson_vals.mean():.4f}")
+                print(f"Spearman correlations: {spearman_vals}")
+                print(f"Mean Spearman rho: {spearman_vals.mean():.4f}")
+                
+                # Print individual task correlations
+                task_names = ['Developmental', 'Housekeeping']
+                print(f"\nPer-task correlations:")
+                for i, task in enumerate(task_names):
+                    print(f"  {task}:")
+                    print(f"    Pearson r: {pearson_vals[i]:.4f}")
+                    print(f"    Spearman rho: {spearman_vals[i]:.4f}")
+                print("="*50)
+                
+            except Exception as e:
+                print(f"Error loading model or making predictions: {e}")
+                print("\nTo train a model first, uncomment the training section below:")
+                print("# metrics = training_with_PL(chosen_model, chosen_dataset)")
+        else:
+            print(f"\nCheckpoint not found: {checkpoint_path}")
+            print("Training a new model...")
+            
+            # Commented out training - uncomment to train
+            # metrics = training_with_PL(
+            #     chosen_model, 
+            #     chosen_dataset, 
+            #     initial_test=True, 
+            #     mcdropout_test=False, 
+            #     verbose=True, 
+            #     wanted_wandb=False
+            # )
+            # print(f"Training completed. Final metrics: {metrics}")
+            
+            print("Training is commented out. To train:")
+            print("1. Uncomment the training_with_PL call above")
+            print("2. Run the script to generate the checkpoint")
+            print("3. Re-run for inference")
+    else:
+        print(f"\nData file not found: {data_path}")
+        print("\nTo use this script:")
+        print("1. Ensure DeepSTARR_data.h5 is in the current directory")
+        print("2. Either train a model first or provide a pre-trained checkpoint")
+        print("3. Run inference to get Pearson and Spearman correlations")

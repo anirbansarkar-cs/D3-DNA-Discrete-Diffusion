@@ -25,6 +25,7 @@ __pycache__/
 *.zip
 *.err
 *.out
+*.gz
 lightning_runs/
 wandb/
 lightning_logs/

@@ -413,12 +413,12 @@ class BaseTrainer:
         
         # WandB logger if configured
         if hasattr(self.cfg, 'wandb') and self.cfg.wandb.get('enabled', False):
-            # config_dict = OmegaConf.to_yaml(self.cfg)
+            config_dict = OmegaConf.to_container(self.cfg, resolve=True)
             wandb_logger = WandbLogger(
                 project=self.cfg.wandb.get('project', 'd3-dna-diffusion'),
                 name=self.cfg.wandb.get('name', f"{self.dataset_name}_{self.cfg.model.architecture}"),
                 entity=self.cfg.wandb.get('entity', None),
-                # config=config_dict,
+                config=config_dict,
                 save_dir=self.work_dir, 
                 id=self.cfg.wandb.get('id', None),
             )

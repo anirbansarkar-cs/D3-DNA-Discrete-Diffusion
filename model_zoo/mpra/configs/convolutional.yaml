@@ -91,7 +91,7 @@ model:
 # Logging configuration (optional)
 wandb:
   enabled: false
-  project: d3-dna-diffusion
+  project: d3-mpra
   name: mpra-convolutional
   entity: d3-cshl
   tags: []
