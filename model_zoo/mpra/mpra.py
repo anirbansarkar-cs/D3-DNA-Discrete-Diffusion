@@ -224,7 +224,7 @@ class PL_MPRA(pl.LightningModule):
         
         # Model configuration
         self.scale = scale
-        self.model = MPRA(output_dim=1)
+        self.model = MPRA(output_dim=3)
         self.name = 'mpra'
         self.metric_names = ['PCC', 'Spearman']
         self.initial_ds = initial_ds
