@@ -22,11 +22,20 @@ __pycache__/
 *.h5
 *.ckpt
 *.npz
+*.zip
 *.err
 *.out
+*.gz
+
 lightning_runs/
 wandb/
 lightning_logs/
 
 experiments/
 evaluation_results/
+npz_to_h5_converter.py
+slurm_outputs/
+
+ckpt_to_pth.py
+convert_checkpoint.py
+run_sample.py
