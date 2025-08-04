@@ -61,13 +61,15 @@ class PromoterEvaluator(BaseEvaluator):
     def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
         """Create Promoter dataloader."""
         # Load datasets 
-        train_ds, val_ds = get_promoter_datasets()
+        train_ds, val_ds, test_ds = get_promoter_datasets(config.paths.data_file)
         
         # Select appropriate dataset
         if split == 'train':
             dataset = train_ds
-        elif split in ['val', 'test']:  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
+        elif split == 'test':
+            dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
             
