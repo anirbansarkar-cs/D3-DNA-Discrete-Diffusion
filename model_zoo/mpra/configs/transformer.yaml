@@ -6,7 +6,7 @@ dataset:
   signal_dim: 3
 
 # Hardware configuration
-ngpus: 1
+ngpus: 2
 nnodes: 1
 tokens: 4
 
@@ -15,8 +15,8 @@ training:
   batch_size: 256
   accum: 1
   max_epochs: 300
-  checkpoint_every_n_epochs: 10
-  log_freq: 50
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
   val_every_n_epochs: 4
   weight: standard
   snapshot_sampling: true
@@ -54,7 +54,7 @@ eval:
 
 # SP-MSE validation configuration
 sp_mse_validation:
-  enabled: false  # Set to true to enable SP-MSE validation during training
+  enabled: true  # Set to true to enable SP-MSE validation during training
   validation_freq_epochs: 4  # Frequency in epochs to run SP-MSE validation
   validation_samples: 1000  # Number of samples from validation set (0 = use all)
   oracle_path: null  # Path to oracle model (auto-resolved if null)
@@ -89,7 +89,7 @@ model:
 
 # Logging configuration (optional)
 wandb:
-  enabled: false
+  enabled: true
   project: d3-mpra
   name: mpra-transformer
   entity: d3-cshl
@@ -99,5 +99,5 @@ wandb:
 # Paths - provide full paths
 paths:
   data_file: "model_zoo/mpra/mpra_data.h5"
-  oracle_model: "model_zoo/mpra/oracle_models/oracle_MPRA_mpra_data.ckpt"
+  oracle_model: "model_zoo/mpra/oracle_models/oracle_mpra_mpra_data.ckpt"
   checkpoints_dir: "checkpoints"
