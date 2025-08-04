@@ -159,25 +159,40 @@ class PromoterEvaluator(BaseEvaluator):
         B, L, K = seq_one_hot.shape
         seq_one_hot = seq_one_hot.cpu()
         
-        # Pad sequence to 4096 length as expected by SEI
-        # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
-        sei_inp = torch.cat([
-            torch.ones((B, 4, 1536)) * 0.25,
-            seq_one_hot.transpose(1, 2),  # Convert to (batch, channels, length)
-            torch.ones((B, 4, 1536)) * 0.25
-        ], 2).to(self.device)  # batchsize x 4 x 4,096
+        # Process in batches to avoid OOM
+        batch_size = 256  # Adjust based on available memory
+        all_predictions = []
         
-        # Get SEI predictions
-        with torch.no_grad():
-            sei_out = oracle_model(sei_inp).cpu().detach().numpy()  # batchsize x 21,907
+        from tqdm import tqdm
+        for i in tqdm(range(0, B, batch_size), desc="Processing SEI batches"):
+            end_idx = min(i + batch_size, B)
+            batch_seq = seq_one_hot[i:end_idx]
+            batch_B = batch_seq.shape[0]
+            
+            # Pad sequence to 4096 length as expected by SEI
+            # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
+            sei_inp = torch.cat([
+                torch.ones((batch_B, 4, 1536)) * 0.25,
+                batch_seq.transpose(1, 2),  # Convert to (batch, channels, length)
+                torch.ones((batch_B, 4, 1536)) * 0.25
+            ], 2).to(self.device)  # batch_B x 4 x 4,096
+            
+            # Get SEI predictions for this batch
+            with torch.no_grad():
+                sei_out = oracle_model(sei_inp).cpu().detach().numpy()  # batch_B x 21,907
+            
+            # Filter for H3K4me3 features if SEI features are available
+            if self.sei_features is not None:
+                h3k4me3_mask = self.sei_features[1].str.strip().values == 'H3K4me3'
+                sei_out = sei_out[:, h3k4me3_mask]  # batch_B x 2,350 (H3K4me3 features)
+            
+            # Take mean across H3K4me3 features for this batch
+            batch_pred = sei_out.mean(axis=1)  # batch_B
+            all_predictions.append(batch_pred)
         
-        # Filter for H3K4me3 features if SEI features are available
-        if self.sei_features is not None:
-            h3k4me3_mask = self.sei_features[1].str.strip().values == 'H3K4me3'
-            sei_out = sei_out[:, h3k4me3_mask]  # batchsize x 2,350 (H3K4me3 features)
-        
-        # Take mean across H3K4me3 features
-        predh3k4me3 = sei_out.mean(axis=1)  # batchsize
+        # Concatenate all batch predictions
+        import numpy as np
+        predh3k4me3 = np.concatenate(all_predictions, axis=0)  # B
         
         return predh3k4me3
     
