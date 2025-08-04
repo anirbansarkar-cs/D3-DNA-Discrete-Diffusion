@@ -208,8 +208,6 @@ def main():
     """Main evaluation function using base framework."""
     # Parse arguments using base framework
     parser = parse_base_args()
-    parser.add_argument('--model_path', required=True, help='Path to model directory (required for evaluation)')
-    parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     args = parser.parse_args()
     
     # Validate required arguments for evaluation
