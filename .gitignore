@@ -39,3 +39,6 @@ slurm_outputs/
 ckpt_to_pth.py
 convert_checkpoint.py
 run_sample.py
+
+target.sei.names
+*.tar
