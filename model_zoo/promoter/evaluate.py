@@ -145,12 +145,17 @@ class PromoterEvaluator(BaseEvaluator):
         Get SEI profile following the proper inference pattern.
         
         Args:
-            seq_one_hot: One-hot encoded sequences (batch_size, seq_length, 4)
+            seq_one_hot: One-hot encoded sequences (batch_size, seq_length, 4) or token indices (batch_size, seq_length)
             oracle_model: SEI oracle model
             
         Returns:
             H3K4me3 predictions (batch_size,)
         """
+        # Convert to one-hot if needed
+        if seq_one_hot.dim() == 2:  # Token indices (batch_size, seq_length)
+            import torch.nn.functional as F
+            seq_one_hot = F.one_hot(seq_one_hot.long(), num_classes=4).float()
+        
         B, L, K = seq_one_hot.shape
         seq_one_hot = seq_one_hot.cpu()
         
