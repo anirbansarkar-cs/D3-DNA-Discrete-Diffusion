@@ -100,10 +100,12 @@ class DeepSTARREvaluator(BaseEvaluator):
     
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
         """Get original test data for SP-MSE comparison."""
-        try:
+        try:            
             # Load DeepSTARR test data h5  
+            print(f"Loading original test data from: {data_path}")
             with h5py.File(data_path, 'r') as data_file:
                 X = torch.tensor(np.array(data_file['X_test']))
+                
             return X
         except Exception as e:
             print(f"Error loading original test data: {e}")
@@ -223,8 +225,8 @@ def main():
     metrics = evaluator.evaluate_with_sampling(
         checkpoint_path=args.checkpoint,
         config=config,
-        oracle_checkpoint=args.oracle_checkpoint,
-        data_path=args.data_path,
+        oracle_checkpoint=args.oracle_checkpoint or config.paths.get('oracle_model'),
+        data_path=args.data_path or config.paths.get('data_file'),
         split=args.split,
         steps=args.steps,
         batch_size=args.batch_size,

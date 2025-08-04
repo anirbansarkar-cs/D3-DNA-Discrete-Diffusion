@@ -215,7 +215,7 @@ class TransformerModel(nn.Module):
         self.scale_by_sigma = getattr(config.model, 'scale_by_sigma', False)
 
     def forward(self, indices: torch.Tensor, labels: Optional[torch.Tensor] = None, 
-                train: bool = True, sigma: torch.Tensor = None) -> torch.Tensor:
+                train: bool = True, sigma: torch.Tensor, layer_idx: Optional[int] = None = None) -> torch.Tensor:
         """
         Forward pass through the transformer.
         
@@ -224,7 +224,7 @@ class TransformerModel(nn.Module):
             labels: Label/signal tensor (batch_size, signal_dim) or None for unconditional
             train: Training mode flag
             sigma: Noise level (batch_size,)
-            
+            layer_idx: Index of the layer to return the representation of
         Returns:
             Model output (batch_size, seq_length, vocab_size)
         """
@@ -240,14 +240,19 @@ class TransformerModel(nn.Module):
 
         # Forward through transformer blocks
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            for block in self.blocks:
-                x = block(x, rotary_cos_sin, c, seqlens=None)
+            for i in range(len(self.blocks)):
+                x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
+                if layer_idx is not None:
+                    if i == layer_idx:
+                        rep = x
+                else:
+                    rep = None
             x = self.output_layer(x, c)
 
         # Mask out the input tokens (standard diffusion technique)
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
         
-        return x
+        return x, rep
 
 
 def create_transformer_model(config: DictConfig) -> TransformerModel:

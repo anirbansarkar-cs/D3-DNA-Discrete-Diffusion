@@ -380,14 +380,14 @@ def parse_base_args():
     """Parse common command line arguments for evaluation scripts."""
     parser = argparse.ArgumentParser(description='D3 Evaluation Script - Sampling + SP-MSE')
     parser.add_argument('--checkpoint', required=True, help='Path to model checkpoint file')
-    parser.add_argument('--architecture', required=True, choices=['transformer', 'convolutional'], help='Model architecture')
-    parser.add_argument('--oracle_checkpoint', required=True, help='Path to oracle model checkpoint (required for SP-MSE)')
-    parser.add_argument('--data_path', required=True, help='Path to data file (required for oracle models)')
+    parser.add_argument('--architecture', required=False, choices=['transformer', 'convolutional'], default='transformer', help='Model architecture')
+    parser.add_argument('--oracle_checkpoint', required=False, help='Path to oracle model checkpoint (required for SP-MSE)')
+    parser.add_argument('--data_path', required=False, help='Path to data file (required for oracle models)')
     parser.add_argument('--config', help='Path to config file (optional, dataset may provide default)')
     parser.add_argument('--split', choices=['train', 'val', 'test'], default='test', help='Dataset split to evaluate on')
     parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     parser.add_argument('--output', help='Output file for results')
-    parser.add_argument('--batch_size', type=int, help='Batch size for evaluation')
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size for evaluation')
     parser.add_argument('--show_progress', action='store_true', help='Show progress bar during sampling')
     parser.add_argument('--save_sequences', action='store_true', help='Save sampled sequences as NPZ file')
     
@@ -431,7 +431,7 @@ def main_evaluate(evaluator: BaseEvaluator, args):
         checkpoint_path=args.checkpoint,
         config=config,
         oracle_checkpoint=args.oracle_checkpoint,
-        data_path=args.data_path,
+        data_path=getattr(args, 'data_file', None),
         split=args.split,
         steps=getattr(args, 'steps', None),
         batch_size=args.batch_size,

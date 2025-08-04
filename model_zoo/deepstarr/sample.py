@@ -48,6 +48,32 @@ class DeepSTARRSampler(BaseSampler):
         # Generate random activities in a reasonable range
         labels = torch.randn(num_samples, 2, device=self.device)
         return labels
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
+        """Create DeepSTARR dataloader."""
+        # Load datasets
+        train_ds, val_ds, test_ds = get_deepstarr_datasets(config.paths.data_file)
+        
+        # Select appropriate dataset
+        if split == 'train':
+            dataset = train_ds
+        elif split == 'val':  # Use val as test for now
+            dataset = val_ds
+        elif split == 'test':
+            dataset = test_ds
+        else:
+            raise ValueError(f"Unknown split: {split}")
+            
+        # Use config batch size if not specified
+        if batch_size is None:
+            batch_size = getattr(config, 'batch_size', 32)
+            
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
 
 
 def load_default_config():
@@ -85,6 +111,32 @@ def main():
     
     config = OmegaConf.load(args.config)
     sampler = DeepSTARRSampler()
+
+    if args.save_rep:
+        # if not args.data_path:
+        #     print("Error: --data_path is required for saving representation")
+        #     return 1
+        # else:
+        print(f"Saving representation of the model to {args.data_path}")
+        results = sampler.save_representation(
+            checkpoint_path=args.checkpoint,
+            config=config,
+            split=args.split,
+            save_rep_timestamp=args.save_rep_timestamp,
+            batch_size=args.batch_size,
+            architecture=args.architecture,
+            output_path=args.output,
+            format=args.format
+        )
+
+        # Print results
+        print(f"\n{sampler.dataset_name} Representation Results:")
+        print("=" * 40)
+        for key, value in results.items():
+            print(f"{key}: {value}")
+        
+        print(f"\n✓ {sampler.dataset_name} saving representation completed successfully!")
+        sys.exit(0)
     
     # Generate conditioning labels based on arguments
     conditioning_labels = None
