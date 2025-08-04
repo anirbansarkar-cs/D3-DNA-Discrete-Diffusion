@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple
 from utils.sp_mse_callback import BaseSPMSEValidationCallback
-from model_zoo.mpra.mpra import PL_mpra
+from model_zoo.mpra.mpra import PL_MPRA
 
 
 class MPRASPMSECallback(BaseSPMSEValidationCallback):
@@ -22,7 +22,7 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
     def load_oracle_model(self):
         """Load MPRA oracle model."""
         try:
-            oracle = PL_mpra.load_from_checkpoint(
+            oracle = PL_MPRA.load_from_checkpoint(
                 self.oracle_path,
                 input_h5_file=self.data_path
             ).eval()
