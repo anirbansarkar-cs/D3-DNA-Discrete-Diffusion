@@ -819,7 +819,7 @@ if __name__ == '__main__':
     chosen_model = 'DeepSTARR'
     chosen_dataset = 'DeepSTARR_data'
     data_path = f'./{chosen_dataset}.h5'
-    checkpoint_path = '../../../../../shared/d3_oracle/oracle_DeepSTARR_DeepSTARR_data.ckpt' # 'oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
+    checkpoint_path = 'oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
     
     print("DeepSTARR Oracle Model Inference")
     print("=" * 40)
