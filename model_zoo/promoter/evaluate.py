@@ -200,10 +200,10 @@ class PromoterEvaluator(BaseEvaluator):
         """Get original test data for SP-MSE comparison."""
         try:
             # Load Promoter test data
-            train_ds, val_ds, test_ds = get_promoter_datasets(data_path)
+            _, _, test_ds = get_promoter_datasets(data_path)
             
-            # Create a small batch for comparison
-            dataloader = DataLoader(val_ds, batch_size=100, shuffle=False)
+            # Return all test sequences to match the number of sampled sequences
+            dataloader = DataLoader(test_ds, batch_size=len(test_ds), shuffle=False)
             batch = next(iter(dataloader))
             
             if len(batch) == 2:
