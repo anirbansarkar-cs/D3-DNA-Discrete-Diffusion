@@ -70,7 +70,7 @@ class DeepSTARRDataset(Dataset):
 
 
 # def get_deepstarr_datasets(data_dir: Optional[str] = None) -> Tuple[Dataset, Dataset]:
-def get_deepstarr_datasets(h5_file_path: str) -> Tuple[Dataset, Dataset]:
+def get_deepstarr_datasets(h5_file_path: str) -> Tuple[Dataset, Dataset, Dataset]:
     """
     Get DeepSTARR train and validation datasets.
     
@@ -78,14 +78,15 @@ def get_deepstarr_datasets(h5_file_path: str) -> Tuple[Dataset, Dataset]:
         data_dir: Directory containing the data files. If None, uses default location.
         
     Returns:
-        Tuple of (train_dataset, valid_dataset)
+        Tuple of (train_dataset, valid_dataset, test_dataset)
     """
     
     # pass in data file path directly from config.paths.data_file
     train_set = DeepSTARRDataset(h5_file_path, split='train')
     valid_set = DeepSTARRDataset(h5_file_path, split='valid')
+    test_set = DeepSTARRDataset(h5_file_path, split='test')
     
-    return train_set, valid_set
+    return train_set, valid_set, test_set
 
 
 def get_deepstarr_dataloaders(config, distributed: bool = True) -> Tuple[DataLoader, DataLoader]:
@@ -112,7 +113,7 @@ def get_deepstarr_dataloaders(config, distributed: bool = True) -> Tuple[DataLoa
         )
     
     # Get datasets
-    train_set, valid_set = get_deepstarr_datasets(config.paths.data_file)
+    train_set, valid_set, _ = get_deepstarr_datasets(config.paths.data_file)
     
     print(f"DeepSTARR dataset sizes - Train: {len(train_set)}, Valid: {len(valid_set)}")
     
@@ -158,7 +159,7 @@ def get_deepstarr_dataloaders_with_cycle(config, distributed: bool = True) -> Tu
     Returns:
         Tuple of (train_loader, valid_loader) with cycle_loader applied
     """
-    train_loader, valid_loader = get_deepstarr_dataloaders(config, distributed)
+    train_loader, valid_loader, _ = get_deepstarr_dataloaders(config, distributed)
     
     # Apply cycle_loader
     train_sampler = train_loader.sampler if hasattr(train_loader, 'sampler') else None

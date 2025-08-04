@@ -93,7 +93,7 @@ class DDiTBlock(nn.Module):
         if seqlens is None:
             cu_seqlens = torch.arange(
                 0, (batch_size + 1) * seq_len, step=seq_len,
-                dtype=torch.int32, device=qkv.device
+                dtype=torch.int32, device=x.device
             )
         else:
             cu_seqlens = seqlens.cumsum(-1)
@@ -115,7 +115,7 @@ class DDiTBlock(nn.Module):
 
 
 class EmbeddingLayer(nn.Module):
-    def __init__(self, dim, vocab_dim):
+    def __init__(self, dim, vocab_dim, signal_dim=2):
         """
         Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
         2-> add in eigenvectors, 3 -> use pretrained embedding matrix
@@ -123,13 +123,17 @@ class EmbeddingLayer(nn.Module):
         super().__init__()
         self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
         #remove if label embedding is used
-        self.signal_embedding = nn.Linear(2, dim)  
+        self.signal_embedding = nn.Linear(signal_dim, dim)
         torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
     def forward(self, x, y):
         vocab_embed = self.embedding[x] #return only this if label embedding is used
-        signal_embed = self.signal_embedding(y.to(torch.float32))
-        return torch.add(vocab_embed, signal_embed[:, None, :]) #[:, None, :] extra for deepstarr
+        if y is not None:
+            signal_embed = self.signal_embedding(y.to(torch.float32))
+            return torch.add(vocab_embed, signal_embed[:, None, :]) #[:, None, :] extra for deepstarr
+        else:
+            # For unconditional generation, return only vocab embedding
+            return vocab_embed
 
 
 class DDitFinalLayer(nn.Module):
@@ -175,13 +179,16 @@ class TransformerModel(nn.Module):
         
         # These should be provided by dataset-specific config
         num_classes = config.dataset.num_classes
+        signal_dim = config.dataset.signal_dim
         class_dropout_prob = getattr(config.model, 'class_dropout_prob', 0.1)
         
         # Core components
         self.vocab_embed = EmbeddingLayer(
             dim=config.model.hidden_size, 
             vocab_dim=vocab_size,
+            signal_dim=config.dataset.signal_dim,
         )
+
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
         self.label_embed = LabelEmbedder(num_classes, config.model.cond_dim, class_dropout_prob)
         self.rotary_emb = rotary.Rotary(config.model.hidden_size // config.model.n_heads)
@@ -207,17 +214,17 @@ class TransformerModel(nn.Module):
         # Model configuration
         self.scale_by_sigma = getattr(config.model, 'scale_by_sigma', False)
 
-    def forward(self, indices: torch.Tensor, labels: torch.Tensor, 
-                train: bool, sigma: torch.Tensor) -> torch.Tensor:
+    def forward(self, indices: torch.Tensor, labels: Optional[torch.Tensor] = None, 
+                train: bool = True, sigma: torch.Tensor, layer_idx: Optional[int] = None = None) -> torch.Tensor:
         """
         Forward pass through the transformer.
         
         Args:
             indices: Token indices (batch_size, seq_length)
-            labels: Label/signal tensor (batch_size, signal_dim)
+            labels: Label/signal tensor (batch_size, signal_dim) or None for unconditional
             train: Training mode flag
             sigma: Noise level (batch_size,)
-            
+            layer_idx: Index of the layer to return the representation of
         Returns:
             Model output (batch_size, seq_length, vocab_size)
         """
@@ -233,14 +240,19 @@ class TransformerModel(nn.Module):
 
         # Forward through transformer blocks
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            for block in self.blocks:
-                x = block(x, rotary_cos_sin, c, seqlens=None)
+            for i in range(len(self.blocks)):
+                x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
+                if layer_idx is not None:
+                    if i == layer_idx:
+                        rep = x
+                else:
+                    rep = None
             x = self.output_layer(x, c)
 
         # Mask out the input tokens (standard diffusion technique)
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
         
-        return x
+        return x, rep
 
 
 def create_transformer_model(config: DictConfig) -> TransformerModel:

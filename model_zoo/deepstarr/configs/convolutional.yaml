@@ -1,7 +1,6 @@
 # DeepSTARR Dataset - Convolutional Architecture Configuration
 dataset:
   name: deepstarr
-  data_file: model_zoo/deepstarr/DeepSTARR_data.h5
   sequence_length: 249
   num_classes: 4
   signal_dim: 2
@@ -52,6 +51,7 @@ eval:
   batch_size: 256
   perplexity: false
   perplexity_batch_size: 32
+  use_evoaug_oracle: false  # Set to true to use EvoAug-trained oracle model
 
 # SP-MSE validation configuration
 sp_mse_validation:
@@ -94,12 +94,12 @@ wandb:
   enabled: false
   project: d3-dna-diffusion
   name: deepstarr-conv
-  entity: null
+  entity: d3-cshl
   tags: []
   notes: ""
 
-# Paths (relative to dataset directory)
+# Paths - provide full paths
 paths:
-  data_dir: "."
-  oracle_model: "oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt"
+  data_file: "model_zoo/deepstarr/DeepSTARR_data.h5"
+  oracle_model: "model_zoo/deepstarr/oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt"
   checkpoints_dir: "checkpoints"

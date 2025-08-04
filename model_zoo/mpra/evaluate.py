@@ -59,9 +59,7 @@ class MPRAEvaluator(BaseEvaluator):
             
         # Use config batch size if not specified
         if batch_size is None:
-            batch_size = getattr(config, 'batch_size', 32)
-            if hasattr(config, 'eval') and hasattr(config.eval, 'batch_size'):
-                batch_size = config.eval.batch_size
+            batch_size = getattr(config.eval, 'batch_size', 32)
             
         return DataLoader(
             dataset,
@@ -156,13 +154,16 @@ def main():
     
     # Run evaluation (always includes sampling + SP-MSE computation)
     metrics = evaluator.evaluate_with_sampling(
-        model_path=args.model_path,
+        checkpoint_path=args.checkpoint,
         config=config,
         oracle_checkpoint=args.oracle_checkpoint,
         data_path=args.data_path,
         split=args.split,
         steps=args.steps,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        architecture=args.architecture,
+        show_progress=args.show_progress,
+        save_sequences=getattr(args, 'save_sequences', False)
     )
     
     # Print and save results

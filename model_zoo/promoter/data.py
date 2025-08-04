@@ -2,11 +2,8 @@
 Promoter Dataset Loader
 
 This module provides dataset loading functionality specific to the Promoter dataset.
-It handles loading promoter sequence data and provides appropriate preprocessing for D3 training.
-
-For production use, this should integrate with the Dirichlet-flow-matching or DDSM repositories:
-- https://github.com/HannesStark/dirichlet-flow-matching
-- https://github.com/jzhoulab/ddsm
+It handles loading promoter sequence data from NPZ files and provides appropriate 
+preprocessing for D3 training.
 """
 
 import os
@@ -19,99 +16,81 @@ from utils.data_utils import cycle_loader
 
 class PromoterDataset(Dataset):
     """
-    Promoter dataset for D3-DNA training.
+    Promoter dataset loader.
     
-    This implementation provides synthetic promoter data with the correct format
-    (sequence + target concatenated) for development purposes.
-    
-    For production use, replace this with actual promoter data loading
-    from the Dirichlet-flow-matching or DDSM repositories.
+    Loads promoter NPZ files and provides proper preprocessing for D3 training.
+    The dataset consists of one-hot encoded DNA sequences and their corresponding
+    regulatory activity labels.
     """
     
-    def __init__(self, n_tsses: int = 100000, rand_offset: int = 10, 
-                 split: str = 'train', seq_length: int = 1024):
+    def __init__(self, data_file: str, split: str = 'train'):
         """
         Initialize the Promoter dataset.
         
         Args:
-            n_tsses: Number of transcription start sites (samples)
-            rand_offset: Random offset for data generation
-            split: Dataset split ('train', 'test', 'valid')
-            seq_length: Length of sequences
+            data_file: Path to the Promoter NPZ data file
+            split: Dataset split ('train', 'valid', 'test')
         """
-        self.n_tsses = n_tsses
-        self.rand_offset = rand_offset
-        self.split = split
-        self.seq_length = seq_length
+        self.data_file = data_file
+        self.split = split.lower()
         
-        # Generate synthetic data for now
-        # In practice, this should load real promoter sequences and targets
-        self.data = self._generate_synthetic_data()
-    
-    def _generate_synthetic_data(self):
-        """Generate synthetic promoter data with correct format."""
-        # Use different seeds for different splits for reproducibility
-        seed_map = {'train': 42, 'test': 123, 'valid': 456}
-        torch.manual_seed(seed_map.get(self.split, 42))
+        if not os.path.exists(data_file):
+            raise FileNotFoundError(f"Promoter data file not found: {data_file}")
         
-        # Generate random one-hot sequences (batch_size, seq_length, 4)
-        sequences = torch.randint(0, 4, (self.n_tsses, self.seq_length))
-        sequences_one_hot = torch.nn.functional.one_hot(sequences, num_classes=4).float()
+        # Load and preprocess data
+        self.X, self.y = self._load_data()
         
-        # Generate random targets (batch_size, seq_length, 1)
-        # These represent regulatory activity or expression levels
-        targets = torch.randn(self.n_tsses, self.seq_length, 1)
+    def _load_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Load and preprocess data from NPZ file."""
+        promo_data = np.load(self.data_file)
         
-        # Normalize targets to a reasonable range
-        targets = torch.sigmoid(targets)  # Values between 0 and 1
+        # Determine which split to load
+        if self.split == 'train':
+            data = promo_data['train']
+        elif self.split == 'valid':
+            data = promo_data['valid'] 
+        elif self.split == 'test':
+            data = promo_data['test']
+        else:
+            raise ValueError(f"Unknown split: {self.split}")
+            
+        # Extract sequences and labels from the data
+        # data shape: (N, 1024, 6) -> seq_one_hot: (N, 1024, 4), label: (N, 1024, 1)
+        seq_one_hot = data[:, :, :4]  # One-hot encoded sequences
+        label = data[:, :, 4:5]       # Regulatory activity labels
         
-        # Concatenate sequence and target: (batch_size, seq_length, 5)
-        # This is the expected format for promoter data in D3
-        data = torch.cat([sequences_one_hot, targets], dim=-1)
+        # Convert to tensors
+        seq_one_hot = torch.tensor(seq_one_hot, dtype=torch.float32)
+        label = torch.tensor(label, dtype=torch.float32)
         
-        return data
+        # Convert one-hot to indices for D3 processing
+        # seq_one_hot shape: (n_samples, seq_length, 4) -> (n_samples, seq_length)
+        X = torch.argmax(seq_one_hot, dim=-1)
+        
+        return X, label
     
     def __len__(self) -> int:
-        return self.n_tsses
+        return len(self.X)
     
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        """
-        Get a single sample.
-        
-        Returns:
-            Tensor of shape (seq_length, 5) where the last dimension contains
-            [A, T, G, C, target_value] for each position
-        """
-        return self.data[idx]
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.X[idx], self.y[idx]
 
 
-def get_promoter_datasets(n_train: int = 100000, n_valid: int = 10000, 
-                         seq_length: int = 1024) -> Tuple[Dataset, Dataset]:
+def get_promoter_datasets(data_file: str) -> Tuple[Dataset, Dataset, Dataset]:
     """
-    Get Promoter train and validation datasets.
+    Get Promoter train, validation, and test datasets.
     
     Args:
-        n_train: Number of training samples
-        n_valid: Number of validation samples
-        seq_length: Length of sequences
+        data_file: Path to the Promoter NPZ data file
         
     Returns:
-        Tuple of (train_dataset, valid_dataset)
+        Tuple of (train_dataset, valid_dataset, test_dataset)
     """
-    train_set = PromoterDataset(
-        n_tsses=n_train, 
-        rand_offset=10, 
-        split='train', 
-        seq_length=seq_length
-    )
-    valid_set = PromoterDataset(
-        n_tsses=n_valid, 
-        rand_offset=0, 
-        split='valid', 
-        seq_length=seq_length
-    )
+    train_set = PromoterDataset(data_file, split='train')
+    valid_set = PromoterDataset(data_file, split='valid')
+    test_set = PromoterDataset(data_file, split='test')
     
-    return train_set, valid_set
+    return train_set, valid_set, test_set
 
 
 def get_promoter_dataloaders(config, distributed: bool = True) -> Tuple[DataLoader, DataLoader]:
@@ -137,13 +116,8 @@ def get_promoter_dataloaders(config, distributed: bool = True) -> Tuple[DataLoad
             f"{config.ngpus} gpus with accumulation {config.training.accum}."
         )
     
-    # Get dataset configuration from config if available
-    seq_length = getattr(config.dataset, 'sequence_length', 1024)
-    n_train = getattr(config.data, 'n_train_samples', 100000)
-    n_valid = getattr(config.data, 'n_valid_samples', 10000)
-    
     # Get datasets
-    train_set, valid_set = get_promoter_datasets(n_train, n_valid, seq_length)
+    train_set, valid_set, _ = get_promoter_datasets(config.paths.data_file)
     
     print(f"Promoter dataset sizes - Train: {len(train_set)}, Valid: {len(valid_set)}")
     
@@ -201,45 +175,3 @@ def get_promoter_dataloaders_with_cycle(config, distributed: bool = True) -> Tup
     return cycled_train_loader, cycled_valid_loader
 
 
-# =============================================================================
-# Integration Notes for Production Use
-# =============================================================================
-"""
-To integrate with actual promoter data from research repositories:
-
-1. Replace PromoterDataset._generate_synthetic_data() with real data loading:
-   - Load actual promoter sequences from FASTA/BED files
-   - Load corresponding expression/activity targets
-   - Apply proper sequence preprocessing (padding, truncation, etc.)
-
-2. Add support for different promoter dataset variants:
-   - Human promoters
-   - Mouse promoters  
-   - Cell-type specific promoters
-   - Tissue-specific expression data
-
-3. Implement proper data splits:
-   - Use predefined train/val/test splits from the research community
-   - Ensure no data leakage between splits
-   - Handle sequence similarity clustering if needed
-
-4. Add data augmentation:
-   - Reverse complement augmentation
-   - Random cropping/sliding windows
-   - Noise injection for robustness
-
-5. Integrate with Dirichlet Flow Matching:
-   - Import PromoterDataset from dirichlet-flow-matching
-   - Use their preprocessing pipeline
-   - Match their data format expectations
-
-Example integration:
-```python
-try:
-    from promoter_dataset import PromoterDataset as RealPromoterDataset
-    PromoterDataset = RealPromoterDataset
-except ImportError:
-    # Fall back to synthetic data
-    pass
-```
-"""

@@ -8,7 +8,7 @@ from utils.utils import get_score_fn
 
 def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
 
-    def loss_fn(model, batch, labels, cond=None, t=None, perturbed_batch=None):
+    def loss_fn(model, batch, labels=None, cond=None, t=None, perturbed_batch=None):
         """
         Batch shape: [B, L] int. D given from graph
         """
@@ -25,12 +25,12 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
 
         log_score_fn = get_score_fn(model, train=train, sampling=False)
-        log_score = log_score_fn(perturbed_batch, labels, sigma)
+        log_score = log_score_fn(perturbed_batch, sigma, labels)
 
         if sc:
             # Use the complex loss calculation with sampling consistency
             curr_sigma, curr_dsigma = noise(t/2)
-            curr_score = log_score_fn(perturbed_batch, labels, curr_sigma)
+            curr_score = log_score_fn(perturbed_batch, curr_sigma, labels)
             t_dsigma = t/2 * curr_dsigma
             rev_rate = t_dsigma[..., None, None] * graph.reverse_rate(perturbed_batch, curr_score)
             x = graph.sample_rate(perturbed_batch, rev_rate)
@@ -38,7 +38,7 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
             # Fix: Create sampling_eps tensor on the same device as batch
             sampling_eps_tensor = torch.tensor(sampling_eps, device=batch.device)
             next_sigma, next_dsigma = noise(sampling_eps_tensor)
-            next_score = log_score_fn(x, labels, next_sigma)
+            next_score = log_score_fn(x, next_sigma, labels)
             t_dsigma_next = sampling_eps_tensor * next_dsigma
             rev_rate_next = t_dsigma_next[..., None, None] * graph.reverse_rate(x, next_score)
             
@@ -106,7 +106,7 @@ def get_step_fn(noise, graph, train, optimize_fn, accum):
     accum_iter = 0
     total_loss = 0
 
-    def step_fn(state, batch, labels, cond=None):
+    def step_fn(state, batch, labels=None, cond=None):
         nonlocal accum_iter 
         nonlocal total_loss
 

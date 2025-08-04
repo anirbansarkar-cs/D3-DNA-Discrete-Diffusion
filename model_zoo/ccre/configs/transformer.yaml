@@ -1,0 +1,95 @@
+# cCRE Dataset - Transformer Architecture Configuration
+dataset:
+  name: ccre
+  sequence_length: 512
+  num_classes: 4
+  signal_dim: 0
+
+# Hardware configuration
+ngpus: 4
+nnodes: 1
+tokens: 4
+
+# Training configuration
+training:
+  batch_size: 256
+  accum: 1
+  max_epochs: 300
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+
+# Data configuration
+data:
+  train: ccre
+  valid: ccre
+  cache_dir: data
+  train_ratio: 0.95
+  valid_ratio: 0.05
+  split_seed: 42
+
+# Graph configuration
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+# Noise configuration
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+# Sampling configuration
+sampling:
+  predictor: euler
+  steps: 512
+  noise_removal: true
+
+# Evaluation configuration
+eval:
+  batch_size: 256
+  perplexity: false
+  perplexity_batch_size: 32
+
+# Optimization configuration
+optim:
+  weight_decay: 0
+  optimizer: AdamW
+  lr: 0.0003
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.0e-08
+  warmup: 2500
+  grad_clip: 1.0
+
+# Model configuration
+model:
+  name: small
+  type: ddit
+  architecture: transformer
+  hidden_size: 768
+  cond_dim: 256
+  length: 512
+  n_blocks: 12
+  n_heads: 12
+  scale_by_sigma: false
+  dropout: 0.1
+  class_dropout_prob: 0.1
+
+# Logging configuration (optional)
+wandb:
+  enabled: true
+  project: d3-ccre-vep
+  name: ccre-transformer
+  entity: d3-cshl
+  tags: []
+  notes: ""
+
+# Paths
+paths:
+  data_file: "/grid/koo/home/yiyu/scratch/cCRE_Processing/output_h5s/ccres_512bp_no_N.h5"
+  checkpoints_dir: "checkpoints"

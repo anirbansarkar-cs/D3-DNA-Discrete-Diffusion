@@ -1,13 +1,12 @@
 # Promoter Dataset - Transformer Architecture Configuration
 dataset:
   name: promoter
-  data_file: model_zoo/promoter/promoter_data.h5
   sequence_length: 1024
   num_classes: 4
   signal_dim: 1
 
 # Hardware configuration
-ngpus: 1
+ngpus: 2
 nnodes: 1
 tokens: 4
 
@@ -16,8 +15,8 @@ training:
   batch_size: 128
   accum: 1
   max_epochs: 300
-  checkpoint_every_n_epochs: 10
-  log_freq: 50
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
   val_every_n_epochs: 4
   weight: standard
   snapshot_sampling: true
@@ -90,15 +89,16 @@ model:
 
 # Logging configuration (optional)
 wandb:
-  enabled: false
-  project: d3-dna-diffusion
+  enabled: true
+  project: d3-promoter
   name: promoter-transformer
-  entity: null
+  entity: d3-cshl
   tags: []
   notes: ""
 
-# Paths (relative to dataset directory)
+# Paths - provide full paths
 paths:
-  data_dir: "."
-  oracle_model: "oracle_models/oracle_promoter_promoter_data.ckpt"
+  data_file: "model_zoo/promoter/Promoter_data.npz"
+  oracle_model: "model_zoo/promoter/oracle_models/best.sei.model.pth.tar"
+  sei_features: "model_zoo/promoter/oracle_models/target.sei.names"
   checkpoints_dir: "checkpoints"

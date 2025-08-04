@@ -10,6 +10,8 @@ model creation and data loading.
 import os
 import sys
 from pathlib import Path
+import datetime
+
 
 # Package imports
 
@@ -36,20 +38,16 @@ class PromoterLightningModule(BaseD3LightningModule):
         """
         Process Promoter batch data.
         
-        Promoter data comes as concatenated (sequence + target) tensors.
-        Shape: (batch_size, seq_length, 5) where last dim is [A, C, G, T, target]
+        Promoter data comes as (sequences, targets) tuple from the dataset.
+        Sequences are already converted to indices, targets are the regulatory labels.
         """
-        if batch.dim() == 3 and batch.shape[-1] == 5:
-            # Extract sequence (first 4 channels) and target (last channel)
-            seq_one_hot = batch[:, :, :4]
-            target = batch[:, :, 4:5]
-            
-            # Convert one-hot to indices for model input
-            inputs = torch.argmax(seq_one_hot, dim=-1)
-            
-            return inputs, target
+        if isinstance(batch, (list, tuple)) and len(batch) == 2:
+            sequences, targets = batch
+            # Sequences are already token indices from the dataset
+            # Targets are the regulatory activity labels
+            return sequences, targets
         else:
-            raise ValueError(f"Expected shape (batch_size, seq_length, 5), got {batch.shape}")
+            raise ValueError(f"Expected (sequences, targets) tuple, got {type(batch)}")
 
 
 class PromoterDataModule(BaseD3DataModule):
@@ -60,8 +58,8 @@ class PromoterDataModule(BaseD3DataModule):
         
     def setup(self, stage: str = None):
         """Setup Promoter datasets."""
-        # Use Promoter-specific data loading
-        self.train_ds, self.val_ds = get_promoter_datasets()
+        # Use Promoter-specific data loading with data_file from config
+        self.train_ds, self.val_ds, _ = get_promoter_datasets(self.cfg.paths.data_file)
         print(f"Promoter dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
 
 

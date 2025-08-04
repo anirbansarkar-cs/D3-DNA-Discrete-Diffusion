@@ -162,7 +162,8 @@ class BaseEvaluator:
             defaults = {
                 'deepstarr': 249,
                 'mpra': 200,
-                'promoter': 1024
+                'promoter': 1024,
+                'atacseq': 1001
             }
             return defaults.get(self.dataset_name.lower(), 249)
     
@@ -229,7 +230,7 @@ class BaseEvaluator:
                               oracle_checkpoint: str, data_path: str,
                               split: str = 'test', steps: Optional[int] = None, 
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
-                              show_progress: bool = False) -> Dict[str, Any]:
+                              show_progress: bool = False, save_sequences: bool = False) -> Dict[str, Any]:
         """
         Evaluate model by sampling sequences and computing SP-MSE with oracle.
         
@@ -243,6 +244,7 @@ class BaseEvaluator:
             batch_size: Batch size for evaluation (optional)
             architecture: Architecture type
             show_progress: Whether to show progress bar during sampling
+            save_sequences: Whether to save sampled sequences as NPZ file
             
         Returns:
             Dictionary of evaluation results including SP-MSE
@@ -262,6 +264,13 @@ class BaseEvaluator:
         sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
             checkpoint_path, config, dataloader, steps, architecture, show_progress
         )
+        
+        # Save sequences as NPZ if requested
+        if save_sequences:
+            # Create output path based on checkpoint directory
+            checkpoint_dir = os.path.dirname(checkpoint_path)
+            npz_path = os.path.join(checkpoint_dir, "sample.npz")
+            self.save_sequences_as_npz(sampled_sequences, npz_path)
         
         # Load oracle model
         print("Loading oracle model for SP-MSE evaluation...")
@@ -295,6 +304,18 @@ class BaseEvaluator:
         print(f"SP-MSE: {sp_mse:.6f}")
         
         return results
+    
+    def save_sequences_as_npz(self, sequences: torch.Tensor, save_path: str):
+        """
+        Save sampled sequences as NPZ file.
+        
+        Args:
+            sequences: Sampled sequences tensor (batch_size, seq_len, 4)
+            save_path: Path to save the NPZ file
+        """
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        np.savez(save_path, sequences.cpu().numpy())
+        print(f"✓ Saved {sequences.shape[0]} sequences to {save_path}")
 
     def evaluate(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer',
                  split: str = 'test', oracle_checkpoint: Optional[str] = None,
@@ -359,15 +380,16 @@ def parse_base_args():
     """Parse common command line arguments for evaluation scripts."""
     parser = argparse.ArgumentParser(description='D3 Evaluation Script - Sampling + SP-MSE')
     parser.add_argument('--checkpoint', required=True, help='Path to model checkpoint file')
-    parser.add_argument('--architecture', required=True, choices=['transformer', 'convolutional'], help='Model architecture')
-    parser.add_argument('--oracle_checkpoint', required=True, help='Path to oracle model checkpoint (required for SP-MSE)')
-    parser.add_argument('--data_path', required=True, help='Path to data file (required for oracle models)')
+    parser.add_argument('--architecture', required=False, choices=['transformer', 'convolutional'], default='transformer', help='Model architecture')
+    parser.add_argument('--oracle_checkpoint', required=False, help='Path to oracle model checkpoint (required for SP-MSE)')
+    parser.add_argument('--data_path', required=False, help='Path to data file (required for oracle models)')
     parser.add_argument('--config', help='Path to config file (optional, dataset may provide default)')
     parser.add_argument('--split', choices=['train', 'val', 'test'], default='test', help='Dataset split to evaluate on')
     parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     parser.add_argument('--output', help='Output file for results')
-    parser.add_argument('--batch_size', type=int, help='Batch size for evaluation')
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size for evaluation')
     parser.add_argument('--show_progress', action='store_true', help='Show progress bar during sampling')
+    parser.add_argument('--save_sequences', action='store_true', help='Save sampled sequences as NPZ file')
     
     return parser
 
@@ -409,12 +431,13 @@ def main_evaluate(evaluator: BaseEvaluator, args):
         checkpoint_path=args.checkpoint,
         config=config,
         oracle_checkpoint=args.oracle_checkpoint,
-        data_path=args.data_path,
+        data_path=getattr(args, 'data_file', None),
         split=args.split,
         steps=getattr(args, 'steps', None),
         batch_size=args.batch_size,
         architecture=args.architecture,
-        show_progress=show_progress
+        show_progress=show_progress,
+        save_sequences=args.save_sequences
     )
     
     # Print results

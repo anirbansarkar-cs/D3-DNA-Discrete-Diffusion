@@ -1,7 +1,6 @@
 # MPRA Dataset - Convolutional Architecture Configuration
 dataset:
   name: mpra
-  data_file: model_zoo/mpra/mpra_data.h5
   sequence_length: 200
   num_classes: 3
   signal_dim: 3
@@ -92,14 +91,14 @@ model:
 # Logging configuration (optional)
 wandb:
   enabled: false
-  project: d3-dna-diffusion
+  project: d3-mpra
   name: mpra-convolutional
-  entity: null
+  entity: d3-cshl
   tags: []
   notes: ""
 
-# Paths (relative to dataset directory)
+# Paths - provide full paths
 paths:
-  data_dir: "."
-  oracle_model: "oracle_models/oracle_MPRA_mpra_data.ckpt"
+  data_file: "model_zoo/mpra/mpra_data.h5"
+  oracle_model: "model_zoo/mpra/oracle_models/oracle_MPRA_mpra_data.ckpt"
   checkpoints_dir: "checkpoints"

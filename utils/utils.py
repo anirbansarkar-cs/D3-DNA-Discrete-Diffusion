@@ -18,7 +18,7 @@ def get_model_fn(model, train=False):
         A model function.
     """
 
-    def model_fn(x, labels, sigma):
+    def model_fn(x, sigma, labels=None):
         """Compute the output of the score-based model.
 
         Args:
@@ -45,10 +45,10 @@ def get_score_fn(model, train=False, sampling=False):
         assert not train, "Must sample in eval mode"
     model_fn = get_model_fn(model, train=train)
 
-    def score_fn(x, labels, sigma):
+    def score_fn(x, sigma, labels=None):
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             sigma = sigma.reshape(-1)
-            score = model_fn(x, labels, sigma)
+            score, _ = model_fn(x, sigma, labels)
             
             if sampling:
                 # when sampling return true score (not log used for training)
@@ -64,10 +64,6 @@ def load_hydra_config_from_run(load_dir):
     cfg_path = os.path.join(load_dir, "hydra/config.yaml")
     cfg = OmegaConf.load(cfg_path)
     return cfg
-
-
-def makedirs(dirname):
-    os.makedirs(dirname, exist_ok=True)
 
 
 def get_logger(logpath, package_files=[], displaying=True, saving=True, debug=False):
@@ -103,7 +99,7 @@ def get_logger(logpath, package_files=[], displaying=True, saving=True, debug=Fa
 
 def restore_checkpoint(ckpt_dir, state, device):
     if not os.path.exists(ckpt_dir):
-        makedirs(os.path.dirname(ckpt_dir))
+        os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
         logging.warning(f"No checkpoint found at {ckpt_dir}. Returned the same state as input")
         return state
     else:

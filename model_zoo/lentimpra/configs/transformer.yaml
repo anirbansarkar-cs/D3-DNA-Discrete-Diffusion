@@ -1,0 +1,103 @@
+# LentIMPRA Dataset - Transformer Architecture Configuration
+dataset:
+  name: lentimpra
+  sequence_length: 230
+  num_classes: 4
+  signal_dim: 1  # Single regression target
+
+# Hardware configuration
+ngpus: 2
+nnodes: 1
+tokens: 4
+
+# Training configuration
+training:
+  batch_size: 256
+  accum: 1
+  max_epochs: 300
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+
+# Data configuration
+data:
+  train: lentimpra
+  valid: lentimpra
+  cache_dir: data
+
+# Graph configuration
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+# Noise configuration
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+# Sampling configuration
+sampling:
+  predictor: euler
+  steps: 128
+  noise_removal: true
+
+# Evaluation configuration
+eval:
+  batch_size: 256
+  perplexity: false
+  perplexity_batch_size: 32
+
+# SP-MSE validation configuration
+sp_mse_validation:
+  enabled: true  # Set to true to enable SP-MSE validation during training
+  validation_freq_epochs: 4  # Frequency in epochs to run SP-MSE validation
+  validation_samples: 1000  # Number of samples from validation set (0 = use all)
+  oracle_path: null  # Path to oracle model (auto-resolved if null)
+  data_path: null  # Path to dataset file (auto-resolved if null)
+  sampling_steps: 50  # Number of sampling steps (auto-resolved if null)
+  early_stopping_patience: null  # Stop training if no improvement for N validations (null = disabled)
+
+# Optimization configuration
+optim:
+  weight_decay: 0
+  optimizer: AdamW
+  lr: 0.0003
+  beta1: 0.9
+  beta2: 0.999 
+  eps: 1.0e-08
+  warmup: 2500
+  grad_clip: 1.0
+
+# Model configuration
+model:
+  name: small
+  type: ddit
+  architecture: transformer
+  hidden_size: 768
+  cond_dim: 128
+  length: 230
+  n_blocks: 12
+  n_heads: 12
+  scale_by_sigma: false
+  dropout: 0.1
+  class_dropout_prob: 0.1
+
+# Logging configuration (optional)
+wandb:
+  enabled: true
+  project: d3-lentimpra
+  name: lentimpra-transformer
+  entity: d3-cshl
+  tags: []
+  notes: ""
+
+# Paths - provide full paths to your data and oracle model
+paths:
+  data_file: "model_zoo/lentimpra/lenti_MPRA_K562_data.h5"  # User must specify their data file
+  oracle_model: "model_zoo/lentimpra/oracle_models/best_model-epoch=24-val_pearson=0.814.ckpt"
+  checkpoints_dir: "checkpoints"

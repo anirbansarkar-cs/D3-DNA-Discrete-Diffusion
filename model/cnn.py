@@ -105,14 +105,14 @@ class ConvolutionalModel(nn.Module):
         
         return nn.ModuleList(blocks)
     
-    def forward(self, indices: torch.Tensor, labels: torch.Tensor, 
-                train: bool, sigma: torch.Tensor) -> torch.Tensor:
+    def forward(self, indices: torch.Tensor, labels: Optional[torch.Tensor] = None, 
+                train: bool = True, sigma: torch.Tensor = None) -> torch.Tensor:
         """
         Forward pass through the convolutional model.
         
         Args:
             indices: Token indices (batch_size, seq_length)
-            labels: Label/signal tensor - shape depends on dataset
+            labels: Label/signal tensor - shape depends on dataset, or None for unconditional
             train: Training mode flag
             sigma: Noise level (batch_size,)
             
@@ -125,31 +125,36 @@ class ConvolutionalModel(nn.Module):
         
         # Process labels based on dimensionality
         # This is where datasets provide their signal in different formats
-        if labels.dim() == 2:
-            # Labels are (batch_size, signal_dim) - need to broadcast to sequence length
-            if labels.shape[-1] == 1:
-                # Single signal value per sequence (e.g., promoter)
-                signal_features = labels.unsqueeze(-1).expand(-1, -1, x.shape[1])
+        if labels is not None:
+            if labels.dim() == 2:
+                # Labels are (batch_size, signal_dim) - need to broadcast to sequence length
+                if labels.shape[-1] == 1:
+                    # Single signal value per sequence (e.g., promoter)
+                    signal_features = labels.unsqueeze(-1).expand(-1, -1, x.shape[1])
+                else:
+                    # Multiple signal values that need to be processed into sequence-level features
+                    # This should be handled by dataset-specific preprocessing
+                    raise NotImplementedError(
+                        "Multi-dimensional labels need dataset-specific preprocessing. "
+                        "This should be handled in dataset-specific model wrappers."
+                    )
+            elif labels.dim() == 3:
+                # Labels are already (batch_size, seq_length, signal_dim) or (batch_size, signal_dim, seq_length)
+                if labels.shape[1] == x.shape[1]:  # (batch_size, seq_length, signal_dim)
+                    signal_features = labels.transpose(1, 2)  # -> (batch_size, signal_dim, seq_length)
+                elif labels.shape[2] == x.shape[1]:  # (batch_size, signal_dim, seq_length)
+                    signal_features = labels
+                else:
+                    raise ValueError(f"Label dimensions {labels.shape} don't match sequence length {x.shape[1]}")
             else:
-                # Multiple signal values that need to be processed into sequence-level features
-                # This should be handled by dataset-specific preprocessing
-                raise NotImplementedError(
-                    "Multi-dimensional labels need dataset-specific preprocessing. "
-                    "This should be handled in dataset-specific model wrappers."
-                )
-        elif labels.dim() == 3:
-            # Labels are already (batch_size, seq_length, signal_dim) or (batch_size, signal_dim, seq_length)
-            if labels.shape[1] == x.shape[1]:  # (batch_size, seq_length, signal_dim)
-                signal_features = labels.transpose(1, 2)  # -> (batch_size, signal_dim, seq_length)
-            elif labels.shape[2] == x.shape[1]:  # (batch_size, signal_dim, seq_length)
-                signal_features = labels
-            else:
-                raise ValueError(f"Label dimensions {labels.shape} don't match sequence length {x.shape[1]}")
+                raise ValueError(f"Unsupported label dimensions: {labels.shape}")
+            
+            # Concatenate sequence and signal features
+            x = torch.cat([x, signal_features], dim=-1)  # (batch_size, seq_length, vocab_size + signal_dim)
         else:
-            raise ValueError(f"Unsupported label dimensions: {labels.shape}")
-        
-        # Concatenate sequence and signal features
-        x = torch.cat([x, signal_features], dim=-1)  # (batch_size, seq_length, vocab_size + signal_dim)
+            # For unconditional generation, create zero signal features
+            signal_features = torch.zeros(x.shape[0], 1, x.shape[1], device=x.device, dtype=x.dtype)
+            x = torch.cat([x, signal_features], dim=-1)  # (batch_size, seq_length, vocab_size + 1)
         
         # Transpose for conv1d: (batch_size, features, seq_length)
         x = x.permute(0, 2, 1)

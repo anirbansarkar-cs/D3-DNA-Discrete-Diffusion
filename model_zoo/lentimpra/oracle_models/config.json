@@ -1,0 +1,32 @@
+{
+    "stem_ch": 64,
+    "stem_ks": 11,
+    "ef_ks": 9,
+    "ef_block_sizes": [
+        80,
+        96,
+        112,
+        128
+    ],
+    "resize_factor": 4,
+    "pool_sizes": [
+        2,
+        2,
+        2,
+        2
+    ],
+    "reverse_augment": true,
+    "use_reverse_channel": false,
+    "use_shift": true,
+    "max_shift": null,
+    "max_lr": 0.01,
+    "weight_decay": 0.1,
+    "epoch_num": 25,
+    "train_batch_size": 1024,
+    "valid_batch_size": 1024,
+    "model_dir": "oracle_models",
+    "data_path": "lenti_MPRA_K562_data.h5",
+    "device": 0,
+    "seed": 777,
+    "num_workers": 8
+}

@@ -1,0 +1,103 @@
+# ATACSeq Dataset - Transformer Architecture Configuration
+dataset:
+  name: deepstarr
+  sequence_length: 1001
+  num_classes: 4
+  signal_dim: 18
+
+# Hardware configuration
+ngpus: 2
+nnodes: 1
+tokens: 4
+
+# Training configuration
+training:
+  batch_size: 256
+  accum: 1
+  max_epochs: 500
+  checkpoint_every_n_epochs: 10
+  log_freq: 50
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+
+# Data configuration
+data:
+  train: deepstarr
+  valid: deepstarr
+  cache_dir: data
+
+# Graph configuration
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+# Noise configuration
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+# Sampling configuration
+sampling:
+  predictor: euler
+  steps: 128
+  noise_removal: true
+
+# Evaluation configuration
+eval:
+  batch_size: 256
+  perplexity: false
+  perplexity_batch_size: 32
+
+# SP-MSE validation configuration
+sp_mse_validation:
+  enabled: false  # Set to true to enable SP-MSE validation during training
+  validation_freq_epochs: 4  # Frequency in epochs to run SP-MSE validation
+  validation_samples: 1000  # Number of samples from validation set (0 = use all)
+  oracle_path: null  # Path to oracle model (auto-resolved if null)
+  data_path: null  # Path to dataset file (auto-resolved if null)
+  sampling_steps: 249  # Number of sampling steps (auto-resolved if null)
+  early_stopping_patience: null  # Stop training if no improvement for N validations (null = disabled)
+
+# Optimization configuration
+optim:
+  weight_decay: 0   # note that it's in the 1e-1 order for pretraining; 1e-2 for fine tuning
+  optimizer: AdamW
+  lr: 0.0003     # TRY THIS
+  beta1: 0.9     # TRY THIS: from diffusion
+  beta2: 0.999   # TRY THIS: from diffusion
+  eps: 1.0e-08
+  warmup: 2500
+  grad_clip: 1.0
+
+# Model configuration
+model:
+  name: small
+  type: ddit
+  architecture: transformer
+  hidden_size: 768
+  cond_dim: 128
+  length: 249
+  n_blocks: 12   # TRY THIS: ith Tran, 4 is min 
+  n_heads: 12
+  scale_by_sigma: false
+  dropout: 0.1
+  class_dropout_prob: 0.1
+
+# Logging configuration (optional)
+wandb:
+  enabled: true
+  project: d3-transfer-learn
+  name: deepstarr-tran-fine-tune
+  entity: d3-cshl
+  tags: []
+  notes: ""
+
+# Paths - provide full paths
+paths:
+  data_file: "/grid/koo/home/duran/D3-DNA-Discrete-Diffusion/model_zoo/deepstarr/data_files/DeepSTARR_data_0.h5"
+  oracle_model: "model_zoo/deepstarr/oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt"
+  checkpoints_dir: "checkpoints"

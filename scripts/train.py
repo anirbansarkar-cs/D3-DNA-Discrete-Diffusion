@@ -31,7 +31,7 @@ from model.ema import ExponentialMovingAverage
 from utils import losses
 from utils import graph_lib
 from utils import noise_lib
-from utils.utils import get_score_fn, load_hydra_config_from_run, makedirs, get_logger
+from utils.utils import get_score_fn, load_hydra_config_from_run, get_logger
 
 
 class BaseD3LightningModule(pl.LightningModule):
@@ -220,7 +220,7 @@ class BaseD3LightningModule(pl.LightningModule):
         Also updates the step counter if present.
         """
         loaded_state = torch.load(checkpoint_path, map_location=self.device)
-        state_dict = loaded_state.get('state_dict', checkpoint)
+        state_dict = loaded_state.get('state_dict', loaded_state)
 
         # --- Load model weights (partial) ---
         model_dict = self.score_model.state_dict()
@@ -294,18 +294,6 @@ class BaseD3LightningModule(pl.LightningModule):
                     print(f"⚠ Could not load EMA state: {e}")
             
             return result
-    
-    def load_from_original_checkpoint_dict(self, state_dict: dict):
-        """Load from original checkpoint dictionary."""
-        # Load model weights
-        if 'model' in state_dict:
-            self.score_model.load_state_dict(state_dict['model'], strict=False)
-        
-        # Load EMA weights  
-        if 'ema' in state_dict and self.ema is not None:
-            self.ema.load_state_dict(state_dict['ema'], device=self.device)
-            
-        return state_dict.get('step', 0)
 
 
 class BaseD3DataModule(pl.LightningDataModule):
@@ -367,8 +355,39 @@ class BaseTrainer:
     def __init__(self, cfg, dataset_name: str, work_dir: Optional[str] = None):
         self.cfg = cfg
         self.dataset_name = dataset_name
-        self.work_dir = work_dir or f"experiments/{dataset_name}"
-        
+        if work_dir:
+            self.work_dir = work_dir
+        else:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.work_dir = f"experiments/{dataset_name}/{timestamp}"
+    
+    def _extract_timestamp_from_checkpoint(self, checkpoint_path: str) -> Optional[str]:
+        """Extract timestamp from checkpoint path if it follows expected format."""
+        path_parts = Path(checkpoint_path).parts
+        # Look for pattern: experiments/{dataset}/{timestamp}/checkpoints/...
+        try:
+            exp_idx = path_parts.index('experiments')
+            if (exp_idx + 3 < len(path_parts) and 
+                path_parts[exp_idx + 1] == self.dataset_name and
+                path_parts[exp_idx + 3] == 'checkpoints'):
+                return path_parts[exp_idx + 2]  # This should be the timestamp
+        except (ValueError, IndexError):
+            pass
+        return None
+    
+    def _update_work_dir_for_resume(self, resume_from: str):
+        """Update work_dir to reuse existing directory if resuming from a checkpoint."""
+        if not resume_from or not os.path.exists(resume_from):
+            return
+            
+        timestamp = self._extract_timestamp_from_checkpoint(resume_from)
+        if timestamp:
+            # Reuse the existing timestamp directory
+            self.work_dir = f"experiments/{self.dataset_name}/{timestamp}"
+            print(f"Reusing existing work directory: {self.work_dir}")
+        else:
+            print(f"Could not extract timestamp from checkpoint path, using new directory: {self.work_dir}")
+    
     def create_lightning_module(self) -> BaseD3LightningModule:
         """Create the Lightning module. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement create_lightning_module()")
@@ -380,7 +399,7 @@ class BaseTrainer:
     def setup_logging(self):
         """Setup logging configuration."""
         log_dir = os.path.join(self.work_dir, "logs")
-        makedirs(log_dir)
+        os.makedirs(log_dir, exist_ok=True)
         
         loggers = []
         
@@ -394,13 +413,14 @@ class BaseTrainer:
         
         # WandB logger if configured
         if hasattr(self.cfg, 'wandb') and self.cfg.wandb.get('enabled', False):
-            # config_dict = OmegaConf.to_yaml(self.cfg)
+            config_dict = OmegaConf.to_container(self.cfg, resolve=True)
             wandb_logger = WandbLogger(
                 project=self.cfg.wandb.get('project', 'd3-dna-diffusion'),
                 name=self.cfg.wandb.get('name', f"{self.dataset_name}_{self.cfg.model.architecture}"),
                 entity=self.cfg.wandb.get('entity', None),
-                # config=config_dict,
-                save_dir=self.work_dir
+                config=config_dict,
+                save_dir=self.work_dir, 
+                id=self.cfg.wandb.get('id', None),
             )
             loggers.append(wandb_logger)
         
@@ -477,8 +497,12 @@ class BaseTrainer:
     
     def train(self, resume_from: Optional[str] = None):
         """Main training method."""
+        # Update work directory if resuming from checkpoint
+        if resume_from:
+            self._update_work_dir_for_resume(resume_from)
+            
         # Create work directory
-        makedirs(self.work_dir)
+        os.makedirs(self.work_dir, exist_ok=True)
         
         # Create Lightning components
         lightning_module = self.create_lightning_module()
@@ -499,7 +523,6 @@ class BaseTrainer:
         
         print(f"Training completed. Results saved to: {self.work_dir}")
         return trainer, lightning_module
-
 
 def parse_base_args():
     """Parse common command line arguments for training scripts."""
