@@ -54,6 +54,45 @@ class MPRADataModule(BaseD3DataModule):
         # Use MPRA-specific data loading
         self.train_ds, self.val_ds = get_mpra_datasets()
         print(f"MPRA dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
+    
+    def train_dataloader(self):
+        """Create training dataloader with distributed sampler support."""
+        from torch.utils.data import DataLoader, DistributedSampler
+        
+        # Use distributed sampler if training in distributed mode
+        sampler = None
+        shuffle = True
+        if self.cfg.ngpus > 1:
+            sampler = DistributedSampler(self.train_ds)
+            shuffle = False  # Don't shuffle when using DistributedSampler
+        
+        return DataLoader(
+            self.train_ds,
+            batch_size=self.cfg.training.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
+            sampler=sampler,
+            num_workers=4,
+            pin_memory=True,
+            shuffle=shuffle,
+            persistent_workers=True,
+        )
+    
+    def val_dataloader(self):
+        """Create validation dataloader with distributed sampler support."""
+        from torch.utils.data import DataLoader, DistributedSampler
+        
+        # Use distributed sampler if training in distributed mode
+        sampler = None
+        if self.cfg.ngpus > 1:
+            sampler = DistributedSampler(self.val_ds, shuffle=False)
+        
+        return DataLoader(
+            self.val_ds,
+            batch_size=self.cfg.eval.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
+            sampler=sampler,
+            num_workers=4,
+            pin_memory=True,
+            shuffle=False,
+        )
 
 
 class MPRATrainer(BaseTrainer):
