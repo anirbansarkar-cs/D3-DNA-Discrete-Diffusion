@@ -6,7 +6,7 @@ dataset:
   signal_dim: 3
 
 # Hardware configuration
-ngpus: 2
+ngpus: 4
 nnodes: 1
 tokens: 4
 
