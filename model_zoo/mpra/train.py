@@ -48,8 +48,9 @@ class MPRADataModule(BaseD3DataModule):
     def setup(self, stage: str = None):
         """Setup MPRA datasets."""
         _ = stage  # Unused parameter, required by Lightning interface
-        # Use MPRA-specific data loading
-        self.train_ds, self.val_ds = get_mpra_datasets()
+        # Use MPRA-specific data loading with config data path
+        data_path = getattr(self.cfg.paths, 'data_file', None)
+        self.train_ds, self.val_ds, _ = get_mpra_datasets(data_path)
         print(f"MPRA dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
 
 

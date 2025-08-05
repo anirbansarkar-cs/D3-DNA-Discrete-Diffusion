@@ -47,13 +47,16 @@ class MPRAEvaluator(BaseEvaluator):
     def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
         """Create MPRA dataloader."""
         # Load datasets
-        train_ds, val_ds = get_mpra_datasets()
+        data_path = getattr(config.paths, 'data_file', None)
+        train_ds, val_ds, test_ds = get_mpra_datasets(data_path)
         
         # Select appropriate dataset
         if split == 'train':
             dataset = train_ds
-        elif split in ['val', 'test']:  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
+        elif split == 'test':
+            dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
             
@@ -91,8 +94,8 @@ class MPRAEvaluator(BaseEvaluator):
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
         """Get original test data for SP-MSE comparison."""
         try:
-            # Load MPRA test data
-            train_ds, val_ds = get_mpra_datasets()
+            # Load MPRA test data  
+            train_ds, val_ds = get_mpra_datasets(data_path)
             
             # Create a small batch for comparison
             dataloader = DataLoader(val_ds, batch_size=100, shuffle=False)

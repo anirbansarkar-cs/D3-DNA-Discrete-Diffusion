@@ -73,25 +73,24 @@ class MPRADataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def get_mpra_datasets(data_dir: Optional[str] = None) -> Tuple[Dataset, Dataset]:
+def get_mpra_datasets(h5_file_path: str = None) -> Tuple[Dataset, Dataset, Dataset]:
     """
     Get MPRA train and validation datasets.
     
     Args:
-        data_dir: Directory containing the data files. If None, uses default location.
+        h5_file_path: Path to the MPRA H5 data file. If None, uses default location.
         
     Returns:
-        Tuple of (train_dataset, valid_dataset)
+        Tuple of (train_dataset, valid_dataset, test_dataset)
     """
-    if data_dir is None:
-        data_dir = os.path.join('model_zoo', 'mpra')
-    
-    h5_file_path = os.path.join(data_dir, 'mpra_data.h5')
+    if h5_file_path is None:
+        h5_file_path = os.path.join('model_zoo', 'mpra', 'mpra_data.h5')
     
     train_set = MPRADataset(h5_file_path, split='train')
     valid_set = MPRADataset(h5_file_path, split='valid')
+    test_set = MPRADataset(h5_file_path, split='test')
     
-    return train_set, valid_set
+    return train_set, valid_set, test_set
 
 
 def get_mpra_dataloaders(config, distributed: bool = True) -> Tuple[DataLoader, DataLoader]:
@@ -118,7 +117,7 @@ def get_mpra_dataloaders(config, distributed: bool = True) -> Tuple[DataLoader, 
         )
     
     # Get datasets
-    train_set, valid_set = get_mpra_datasets()
+    train_set, valid_set, _ = get_mpra_datasets(config.paths.data_file)
     
     print(f"MPRA dataset sizes - Train: {len(train_set)}, Valid: {len(valid_set)}")
     
