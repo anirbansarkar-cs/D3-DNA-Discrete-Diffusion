@@ -196,13 +196,23 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                 # Generate samples
                 generated_sequences = sampling_fn(pl_module.score_model, val_targets)
                 
+                # Debug: Check if generated sequences are identical to validation sequences
+                if torch.allclose(generated_sequences, val_sequences, atol=1e-6):
+                    print(f"WARNING: Generated sequences are identical to validation sequences!")
+                
                 # Get oracle predictions
                 val_score = self.get_oracle_predictions(val_sequences, device)
                 generated_score = self.get_oracle_predictions(generated_sequences, device)
                 
+                # Debug: Print score statistics
+                print(f"Validation score range: [{val_score.min():.6f}, {val_score.max():.6f}]")
+                print(f"Generated score range: [{generated_score.min():.6f}, {generated_score.max():.6f}]")
+                print(f"Score difference range: [{(val_score - generated_score).min():.6f}, {(val_score - generated_score).max():.6f}]")
+                
                 # Calculate SP-MSE
                 sp_mse = (val_score - generated_score) ** 2
                 mean_sp_mse = torch.mean(sp_mse).cpu().item()
+                print(f"SP-MSE: {mean_sp_mse:.10f}")
                 
                 # Log metrics using Lightning module's log method (automatically handles all loggers)
                 pl_module.log('sp_mse/validation', mean_sp_mse, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
