@@ -143,13 +143,14 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         Returns:
             Tuple of (sequences, targets)
         """
-        if batch.dim() == 3 and batch.shape[-1] == 5:
+        # Handle case where batch might be a list or tuple
+        if isinstance(batch, (list, tuple)) and len(batch) == 2:
+            sequences, targets = batch
+            return sequences, targets
+        elif hasattr(batch, 'dim') and batch.dim() == 3 and batch.shape[-1] == 5:
             # Promoter format: (batch_size, seq_length, 5)
             sequences = batch  # Keep full format for oracle
             targets = batch[:, :, 4:5]  # Extract target part
-            return sequences, targets
-        elif isinstance(batch, (list, tuple)) and len(batch) == 2:
-            sequences, targets = batch
             return sequences, targets
         else:
             raise ValueError(f"Unexpected batch format: {batch.shape if hasattr(batch, 'shape') else type(batch)}")

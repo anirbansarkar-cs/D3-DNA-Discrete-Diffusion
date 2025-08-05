@@ -196,28 +196,13 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                 # Generate samples
                 generated_sequences = sampling_fn(pl_module.score_model, val_targets)
                 
-                # Debug: Check if generated sequences are identical to validation sequences
-                # Ensure both tensors are on the same device for comparison
-                val_seq_device = val_sequences.to(device)
-                gen_seq_device = generated_sequences.to(device)
-                if torch.allclose(gen_seq_device, val_seq_device, atol=1e-6):
-                    print(f"WARNING: Generated sequences are identical to validation sequences!")
-                
                 # Get oracle predictions
                 val_score = self.get_oracle_predictions(val_sequences, device)
                 generated_score = self.get_oracle_predictions(generated_sequences, device)
                 
-                # Debug: Print score statistics - ensure scores are on same device
-                val_score_cpu = val_score.cpu()
-                gen_score_cpu = generated_score.cpu()
-                print(f"Validation score range: [{val_score_cpu.min():.6f}, {val_score_cpu.max():.6f}]")
-                print(f"Generated score range: [{gen_score_cpu.min():.6f}, {gen_score_cpu.max():.6f}]")
-                print(f"Score difference range: [{(val_score_cpu - gen_score_cpu).min():.6f}, {(val_score_cpu - gen_score_cpu).max():.6f}]")
-                
-                # Calculate SP-MSE - ensure both scores are on same device
-                sp_mse = (val_score_cpu - gen_score_cpu) ** 2
-                mean_sp_mse = torch.mean(sp_mse).item()
-                print(f"SP-MSE: {mean_sp_mse:.10f}")
+                # Calculate SP-MSE
+                sp_mse = (val_score - generated_score) ** 2
+                mean_sp_mse = torch.mean(sp_mse).cpu().item()
                 
                 # Log metrics using Lightning module's log method (automatically handles all loggers)
                 pl_module.log('sp_mse/validation', mean_sp_mse, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
