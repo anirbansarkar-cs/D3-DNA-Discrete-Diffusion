@@ -22,8 +22,9 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
     def load_oracle_model(self):
         """Load MPRA oracle model."""
         try:
+            # Standard Lightning checkpoint loading
             oracle = PL_MPRA.load_from_checkpoint(
-                self.oracle_path,
+                self.oracle_path, 
                 input_h5_file=self.data_path
             ).eval()
             return oracle
@@ -40,7 +41,7 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
             device: Device to run on
             
         Returns:
-            Oracle predictions tensor
+            Oracle predictions tensor with shape (batch_size, 3) for 3 cell lines
         """
         if self.oracle_model is None:
             raise RuntimeError("Oracle model not loaded")
@@ -58,7 +59,7 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
         # Convert from (batch_size, length, channels) to (batch_size, channels, length)
         sequences_input = sequences_one_hot.permute(0, 2, 1).to(device)
         
-        # Get oracle predictions
+        # Get oracle predictions using Lightning model's predict_custom method
         with torch.no_grad():
             predictions = self.oracle_model.predict_custom(sequences_input)
         
@@ -81,18 +82,16 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
             raise ValueError(f"Expected (sequences, targets) pair, got {type(batch)}")
 
 
-def create_mpra_sp_mse_callback(cfg, dataset_name: str = 'mpra'):
+def create_mpra_sp_mse_callback(cfg):
     """
     Create MPRA SP-MSE callback from configuration.
     
     Args:
         cfg: Configuration object
-        dataset_name: Dataset name (default: 'mpra')
         
     Returns:
         MPRASPMSECallback instance or None if not enabled
     """
-    _ = dataset_name  # Unused parameter for API consistency
     if not hasattr(cfg, 'sp_mse_validation') or not cfg.sp_mse_validation.get('enabled', False):
         return None
     
@@ -123,6 +122,6 @@ def create_mpra_sp_mse_callback(cfg, dataset_name: str = 'mpra'):
         early_stopping_patience=sp_mse_cfg.get('early_stopping_patience')
     )
     
-    print(f"✓ SP-MSE callback configured to use MPRA oracle: {oracle_path}")
+    print(f"✓ SP-MSE callback configured for MPRA oracle: {oracle_path}")
     
     return callback
