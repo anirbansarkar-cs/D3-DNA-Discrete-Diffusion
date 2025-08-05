@@ -14,6 +14,7 @@ import re
 from typing import Tuple
 from utils.sp_mse_callback import BaseSPMSEValidationCallback
 from model_zoo.promoter.sei import Sei, NonStrandSpecific
+from tqdm import tqdm
 
 
 def upgrade_state_dict(state_dict, prefixes=["encoder.sentence_encoder.", "encoder."]):
@@ -124,7 +125,7 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         self.oracle_model = self.oracle_model.to(device)
         self.oracle_model.eval()
         
-        for i in range(0, B, batch_size):
+        for i in tqdm(range(0, B, batch_size)):
             end_idx = min(i + batch_size, B)
             batch_seq = seq_one_hot[i:end_idx]
             batch_B = batch_seq.shape[0]
