@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 # Import base framework and MPRA-specific components
 from scripts.evaluate import BaseEvaluator, parse_base_args, main_evaluate
 from model_zoo.mpra.data import get_mpra_datasets
-from model_zoo.mpra.mpra import PL_mpra
+from model_zoo.mpra.mpra import PL_MPRA
 
 
 class MPRAEvaluator(BaseEvaluator):
@@ -75,7 +75,7 @@ class MPRAEvaluator(BaseEvaluator):
             if not data_path:
                 data_path = 'model_zoo/mpra/mpra_data.h5'
                 
-            oracle = PL_mpra.load_from_checkpoint(
+            oracle = PL_MPRA.load_from_checkpoint(
                 oracle_checkpoint, 
                 input_h5_file=data_path
             ).eval()

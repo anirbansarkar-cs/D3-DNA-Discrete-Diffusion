@@ -2,7 +2,7 @@
 dataset:
   name: mpra
   sequence_length: 200
-  num_classes: 3
+  num_classes: 4
   signal_dim: 3
 
 # Hardware configuration

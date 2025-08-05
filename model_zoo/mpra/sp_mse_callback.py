@@ -53,11 +53,11 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
         
         # MPRA expects input as (batch_size, channels, length)
         # Convert from (batch_size, length, channels) to (batch_size, channels, length)
-        sequences_input = sequences_one_hot.permute(0, 2, 1).to(device)
+        sequences_input = sequences_one_hot.permute(0, 2, 1)
         
-        # Get oracle predictions
+        # Get oracle predictions - predict_custom handles device placement internally
         with torch.no_grad():
-            predictions = self.oracle_model.predict_custom(sequences_input)
+            predictions = self.oracle_model.predict_custom(sequences_input.cpu())
         
         return predictions
     

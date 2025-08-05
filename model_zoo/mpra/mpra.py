@@ -224,7 +224,7 @@ class PL_MPRA(pl.LightningModule):
         
         # Model configuration
         self.scale = scale
-        self.model = MPRA(output_dim=3)
+        self.model = MPRA(output_dim=3)  # Keep 3 to match y_train dimensions
         self.name = 'mpra'
         self.metric_names = ['PCC', 'Spearman']
         self.initial_ds = initial_ds
@@ -251,7 +251,7 @@ class PL_MPRA(pl.LightningModule):
             ).permute(0, 2, 1)
             self.y_train = torch.tensor(
                 np.array(data['y_train']).astype(np.float32)
-            )[:, 2].unsqueeze(1)
+            )
             
             # Load and preprocess test data
             self.X_test = torch.tensor(
@@ -259,7 +259,7 @@ class PL_MPRA(pl.LightningModule):
             ).permute(0, 2, 1)
             self.y_test = torch.tensor(
                 np.array(data['y_test']).astype(np.float32)
-            )[:, 2].unsqueeze(1)
+            )
             
             # Load and preprocess validation data
             self.X_valid = torch.tensor(
@@ -267,7 +267,7 @@ class PL_MPRA(pl.LightningModule):
             ).permute(0, 2, 1)
             self.y_valid = torch.tensor(
                 np.array(data['y_valid']).astype(np.float32)
-            )[:, 2].unsqueeze(1)
+            )
             
             self.X_test2 = self.X_test
             self.y_test2 = self.y_test
@@ -384,8 +384,7 @@ class PL_MPRA(pl.LightningModule):
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
-            x = x.to(self.device)  # Move input to model device
-            pred = self.model(x)
+            pred = self.model(x.to(self.device))
             if not keepgrad:
                 pred = pred.detach().cpu()
             preds = torch.cat((preds, pred), axis=0)
@@ -415,8 +414,7 @@ class PL_MPRA(pl.LightningModule):
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
-            x = x.to(self.device)  # Move input to model device
-            pred = self.model(x)
+            pred = self.model(x.to(self.device))
             if not keepgrad:
                 pred = pred.detach().cpu()
             preds = torch.cat((preds, pred), axis=0)
