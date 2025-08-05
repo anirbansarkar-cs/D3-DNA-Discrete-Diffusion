@@ -384,6 +384,7 @@ class PL_MPRA(pl.LightningModule):
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
+            x = x.to(self.device)  # Move input to model device
             pred = self.model(x)
             if not keepgrad:
                 pred = pred.detach().cpu()
@@ -414,6 +415,7 @@ class PL_MPRA(pl.LightningModule):
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
+            x = x.to(self.device)  # Move input to model device
             pred = self.model(x)
             if not keepgrad:
                 pred = pred.detach().cpu()
