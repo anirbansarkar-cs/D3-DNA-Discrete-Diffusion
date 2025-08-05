@@ -43,7 +43,9 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
                 state_dict = upgrade_state_dict(checkpoint['state_dict'], prefixes=['module.'])
                 oracle.load_state_dict(state_dict, strict=False)
             
-            return oracle.eval()
+            # Ensure model is in eval mode and return
+            oracle.eval()
+            return oracle
         except Exception as e:
             print(f"Failed to load Promoter SEI oracle model: {e}")
             return None
@@ -61,6 +63,9 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         """
         if self.oracle_model is None:
             raise RuntimeError("Oracle model not loaded")
+        
+        # Ensure oracle model is on the correct device
+        self.oracle_model = self.oracle_model.to(device)
         
         # Load SEI features once if not already loaded
         if not hasattr(self, 'sei_features'):
@@ -86,10 +91,10 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         predictions = self._get_sei_profile(sequences_one_hot, device)
         
         # Convert to tensor and ensure proper shape
-        if isinstance(predictions, list):
-            predictions = torch.tensor(predictions, device=device)
+        if isinstance(predictions, (list, np.ndarray)):
+            predictions = torch.tensor(predictions, dtype=torch.float32, device=device)
         else:
-            predictions = torch.from_numpy(predictions).to(device)
+            predictions = predictions.to(device)
         
         # Ensure predictions is 1D and add channel dimension
         if predictions.dim() == 0:
@@ -108,18 +113,23 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         Returns:
             H3K4me3 predictions (batch_size,)
         """
-        B, L, K = seq_one_hot.shape
+        B, _, _ = seq_one_hot.shape
         seq_one_hot = seq_one_hot.cpu()
         
         # Process in smaller batches to avoid GPU memory issues
         batch_size = min(32, B)  # Limit batch size to avoid OOM
         all_predictions = []
         
+        # Ensure oracle model is on correct device and in eval mode
+        self.oracle_model = self.oracle_model.to(device)
+        self.oracle_model.eval()
+        
         for i in range(0, B, batch_size):
             end_idx = min(i + batch_size, B)
             batch_seq = seq_one_hot[i:end_idx]
             batch_B = batch_seq.shape[0]
             
+            sei_inp = None
             try:
                 # Pad sequence to 4096 length as expected by SEI
                 # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
@@ -134,12 +144,8 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
                 
                 with torch.no_grad():
                     sei_out = self.oracle_model(sei_inp)
-                    sei_out = sei_out.cpu().detach().numpy()  # batch_B x 21,907
-                
-                # Clean up GPU memory immediately
-                del sei_inp
-                if device.type == 'cuda':
-                    torch.cuda.empty_cache()
+                    # Convert to numpy immediately and detach from GPU
+                    sei_out = sei_out.detach().cpu().numpy()  # batch_B x 21,907
                 
                 # Filter for H3K4me3 features if SEI features are available
                 if self.sei_features is not None:
@@ -152,14 +158,17 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
                 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
-                    # Clear cache and try with even smaller batch
-                    if device.type == 'cuda':
-                        torch.cuda.empty_cache()
                     print(f"GPU OOM, skipping batch {i}-{end_idx}")
                     # Return zeros for this batch as fallback
                     all_predictions.append(np.zeros(batch_B))
                 else:
                     raise e
+            finally:
+                # Clean up GPU tensors properly
+                if sei_inp is not None:
+                    del sei_inp
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
         
         # Concatenate all batch predictions
         predh3k4me3 = np.concatenate(all_predictions, axis=0)  # B
@@ -200,6 +209,7 @@ def create_promoter_sp_mse_callback(cfg, dataset_name: str = 'promoter'):
     Returns:
         PromoterSPMSECallback instance or None if not enabled
     """
+    _ = dataset_name  # Unused parameter for API consistency
     if not hasattr(cfg, 'sp_mse_validation') or not cfg.sp_mse_validation.get('enabled', False):
         return None
     
