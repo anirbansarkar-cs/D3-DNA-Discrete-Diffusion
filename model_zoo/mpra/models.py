@@ -21,9 +21,9 @@ class MPRATransformerModel(TransformerModel):
         if not hasattr(config, 'dataset'):
             config.dataset = {}
         config.dataset.name = 'mpra'
-        config.dataset.signal_dim = 3
-        config.dataset.num_classes = 3
-        config.dataset.sequence_length = 200
+        config.dataset.signal_dim = 3  # Three cell lines: K562, HepG2, SK-N-SH
+        config.dataset.num_classes = 4
+        config.dataset.sequence_length = 200  # MPRA sequence length
         
         super().__init__(config)
 
@@ -36,9 +36,9 @@ class MPRAConvolutionalModel(ConvolutionalModel):
         if not hasattr(config, 'dataset'):
             config.dataset = {}
         config.dataset.name = 'mpra'
-        config.dataset.signal_dim = 3
-        config.dataset.num_classes = 3
-        config.dataset.sequence_length = 200
+        config.dataset.signal_dim = 3  # Three cell lines: K562, HepG2, SK-N-SH
+        config.dataset.num_classes = 4
+        config.dataset.sequence_length = 200  # MPRA sequence length
         
         super().__init__(config)
     
@@ -47,15 +47,16 @@ class MPRAConvolutionalModel(ConvolutionalModel):
         """
         MPRA-specific forward pass with label preprocessing.
         
-        MPRA uses a similar approach to DeepSTARR but with 3D signals.
+        MPRA uses a special label embedding layer for convolutional architecture
+        with 3 output dimensions for the three cell lines.
         """
         # Convert indices to one-hot
         x = torch.nn.functional.one_hot(indices, num_classes=4).float()
         
         # MPRA-specific label processing for conv architecture
-        # Similar to DeepSTARR but with 3D input
+        # Uses a label embedding layer that broadcasts to sequence length
         label_emb = torch.nn.Sequential(
-            torch.nn.Linear(3, self.config.dataset.sequence_length),
+            torch.nn.Linear(3, self.config.dataset.sequence_length),  # 3 cell lines
             torch.nn.SiLU(),
             torch.nn.Linear(self.config.dataset.sequence_length, self.config.dataset.sequence_length),
         ).to(labels.device)
