@@ -373,13 +373,16 @@ class PL_MPRA(pl.LightningModule):
         )
         preds = torch.empty(0)
         
+        # Get the actual device the model is on, not self.device which may be stale
+        model_device = next(self.model.parameters()).device
+        
         if keepgrad:
-            preds = preds.to(self.device)
+            preds = preds.to(model_device)
         else:
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
-            pred = self.model(x.to(self.device))
+            pred = self.model(x.to(model_device))  # Use actual model device
             if not keepgrad:
                 pred = pred.detach().cpu()
             preds = torch.cat((preds, pred), axis=0)

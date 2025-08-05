@@ -59,7 +59,7 @@ sp_mse_validation:
   validation_samples: 1000  # Number of samples from validation set (0 = use all)
   oracle_path: null  # Path to oracle model (auto-resolved if null)
   data_path: null  # Path to dataset file (auto-resolved if null)
-  sampling_steps: 10  # Number of sampling steps (matches sequence length)
+  sampling_steps: 50  # Number of sampling steps (consistent with working datasets)
   early_stopping_patience: null  # Stop training if no improvement for N validations (null = disabled)
 
 # Optimization configuration
