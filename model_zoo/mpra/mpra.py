@@ -204,7 +204,7 @@ class PL_MPRA(pl.LightningModule):
                  train_max_epochs: int = 100,
                  patience: int = 10,
                  min_delta: float = 0.001,
-                 input_h5_file: str = 'mpra_data.h5',
+                 input_h5_file: str = 'mpra_tewhey.h5',
                  lr: float = 0.002,
                  initial_ds: bool = True,
                  weight_decay: float = 1e-6,

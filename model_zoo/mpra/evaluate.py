@@ -12,12 +12,9 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
-from utils.utils import update_cfg_with_unknown_args
 from omegaconf import OmegaConf
 from typing import Optional
 from tqdm import tqdm
-import h5py
-import numpy as np
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -41,15 +38,22 @@ class MPRAEvaluator(BaseEvaluator):
         
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
+    def get_sequence_length(self, config: OmegaConf) -> int:
+        """Get MPRA sequence length."""
+        if hasattr(config, 'model') and hasattr(config.model, 'length'):
+            return config.model.length
+        return 200  # MPRA default sequence length
+    
     def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
         """Create MPRA dataloader."""
         # Load datasets
-        train_ds, val_ds, test_ds = get_mpra_datasets(config.paths.data_file)
+        data_path = getattr(config.paths, 'data_file', None)
+        train_ds, val_ds, test_ds = get_mpra_datasets(data_path)
         
         # Select appropriate dataset
         if split == 'train':
             dataset = train_ds
-        elif split == 'val':  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
         elif split == 'test':
             dataset = test_ds
@@ -68,16 +72,12 @@ class MPRAEvaluator(BaseEvaluator):
             pin_memory=True
         )
     
-    def load_oracle_model(self, oracle_checkpoint: str, data_path: str, use_evoaug_oracle: bool = False):
+    def load_oracle_model(self, oracle_checkpoint: str, data_path: str):
         """Load MPRA oracle model."""
         try:
-            import os
-            # Check if data_path is empty, a directory, or doesn't exist
-            if not data_path or os.path.isdir(data_path) or not os.path.exists(data_path):
+            if not data_path:
                 data_path = 'model_zoo/mpra/mpra_data.h5'
-                print(f"Using default data path: {data_path}")
-            
-            # Load standard Lightning oracle model
+                
             oracle = PL_MPRA.load_from_checkpoint(
                 oracle_checkpoint, 
                 input_h5_file=data_path
@@ -93,86 +93,29 @@ class MPRAEvaluator(BaseEvaluator):
     
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
         """Get original test data for SP-MSE comparison."""
-        try:            
-            # Load MPRA test data h5  
-            print(f"Loading original test data from: {data_path}")
-            with h5py.File(data_path, 'r') as data_file:
-                # MPRA uses x_test key
-                X = torch.tensor(np.array(data_file['x_test']))
+        try:
+            # Load MPRA test data  
+            train_ds, val_ds = get_mpra_datasets(data_path)
+            
+            # Create a small batch for comparison
+            dataloader = DataLoader(val_ds, batch_size=100, shuffle=False)
+            batch = next(iter(dataloader))
+            
+            if len(batch) == 2:
+                sequences, _ = batch
+                return sequences
+            else:
+                return batch
                 
-            return X
         except Exception as e:
             print(f"Error loading original test data: {e}")
-            return torch.zeros(100, 4, 200)  # Default MPRA sequence length
-    
-    def evaluate_with_sampling(self, checkpoint_path: str, config: OmegaConf, 
-                              oracle_checkpoint: str, data_path: str,
-                              split: str = 'test', steps: Optional[int] = None, 
-                              batch_size: Optional[int] = None, architecture: str = 'transformer',
-                              show_progress: bool = False, save_sequences: bool = False):
-        """
-        Override base method for MPRA-specific evaluation.
-        """
-        print(f"Evaluating {self.dataset_name} on {split} split with sampling...")
-        
-        # Set default steps to sequence length if not provided
-        if steps is None:
-            steps = self.get_sequence_length(config)
-            print(f"Using default steps: {steps} (sequence length)")
-        
-        # Create dataloader
-        dataloader = self.create_dataloader(config, split, batch_size)
-        
-        # Sample sequences using PC sampler
-        print(f"Sampling sequences with PC sampler ({steps} steps)...")
-        sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
-            checkpoint_path, config, dataloader, steps, architecture, show_progress
-        )
-        
-        # Save sequences as NPZ if requested
-        if save_sequences:
-            # Create output path based on checkpoint directory
-            checkpoint_dir = os.path.dirname(checkpoint_path)
-            npz_path = os.path.join(checkpoint_dir, "sample.npz")
-            self.save_sequences_as_npz(sampled_sequences, npz_path)
-        
-        # Load oracle model
-        print("Loading oracle model for SP-MSE evaluation...")
-        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
-        
-        if oracle_model is None:
-            return {
-                'error': 'oracle_model_not_loaded',
-                'num_samples': sampled_sequences.shape[0],
-                'sequence_length': sampled_sequences.shape[1],
-                'sampling_steps': steps
-            }
-        
-        # Get original test data for comparison
-        original_data = self.get_original_test_data(data_path)
-        
-        # Compute SP-MSE
-        print("Computing SP-MSE...")
-        sp_mse = self.compute_sp_mse(sampled_sequences, oracle_model, original_data)
-        
-        results = {
-            'dataset': self.dataset_name,
-            'split': split,
-            'num_samples': sampled_sequences.shape[0],
-            'sequence_length': sampled_sequences.shape[1],
-            'sampling_steps': steps,
-            'sp_mse': sp_mse,
-            'oracle_evaluation': 'completed'
-        }
-        
-        print(f"SP-MSE: {sp_mse:.6f}")
-        
-        return results
+            # Return dummy data as fallback
+            return torch.zeros(100, 200, 4)  # One-hot encoded sequences
 
 
-def load_default_config():
-    """Load MPRA default configuration (transformer)."""
-    config_file = Path(__file__).parent / 'configs' / 'transformer.yaml'
+def load_config(architecture: str):
+    """Load MPRA configuration."""
+    config_file = Path(__file__).parent / 'configs' / f'{architecture}.yaml'
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
     return OmegaConf.load(config_file)
@@ -184,15 +127,18 @@ def main():
     parser = parse_base_args()
     args = parser.parse_args()
     
-    # Set save_sequences default to True for MPRA
-    if not hasattr(args, 'save_sequences') or args.save_sequences is False:
-        args.save_sequences = True
-        print("✓ MPRA: Enabled sequence saving by default")
+    # Validate required arguments for evaluation
+    if not args.oracle_checkpoint:
+        print("Error: --oracle_checkpoint is required for evaluation")
+        return 1
+    if not args.data_path:
+        print("Error: --data_path is required for evaluation")
+        return 1
     
     # Load config if not provided
     if not args.config:
         try:
-            config_path = Path(__file__).parent / 'configs' / 'transformer.yaml'
+            config_path = Path(__file__).parent / 'configs' / f'{args.architecture}.yaml'
             if config_path.exists():
                 args.config = str(config_path)
                 print(f"Using default config: {args.config}")
@@ -205,26 +151,20 @@ def main():
             return 1
     
     config = OmegaConf.load(args.config)
-
-    # override paths.data_file with args.data_path if provided
-    if args.data_path:
-        config.paths.data_file = args.data_path
-        print(f"Overriding paths.data_file with {args.data_path}")
-
     evaluator = MPRAEvaluator()
     
     # Run evaluation (always includes sampling + SP-MSE computation)
     metrics = evaluator.evaluate_with_sampling(
         checkpoint_path=args.checkpoint,
         config=config,
-        oracle_checkpoint=args.oracle_checkpoint or config.paths.get('oracle_model'),
-        data_path=args.data_path or config.paths.get('data_file'),
+        oracle_checkpoint=args.oracle_checkpoint,
+        data_path=args.data_path,
         split=args.split,
         steps=args.steps,
         batch_size=args.batch_size,
         architecture=args.architecture,
         show_progress=args.show_progress,
-        save_sequences=args.save_sequences
+        save_sequences=getattr(args, 'save_sequences', False)
     )
     
     # Print and save results

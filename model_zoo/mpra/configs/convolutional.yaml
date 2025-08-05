@@ -1,9 +1,9 @@
 # MPRA Dataset - Convolutional Architecture Configuration
 dataset:
   name: mpra
-  sequence_length: 200  # MPRA sequence length
+  sequence_length: 200
   num_classes: 4
-  signal_dim: 3  # Three cell lines: K562, HepG2, SK-N-SH
+  signal_dim: 3
 
 # Hardware configuration
 ngpus: 1
@@ -80,19 +80,19 @@ model:
   architecture: convolutional
   hidden_size: 768
   cond_dim: 256
+  conv_channels: 256
   length: 200
   n_blocks: 12
   n_heads: 12
   scale_by_sigma: false
   dropout: 0.1
-  conv_channels: 256
   class_dropout_prob: 0.1
 
 # Logging configuration (optional)
 wandb:
-  enabled: false
-  project: d3-dna-diffusion
-  name: mpra-conv
+  enabled: true
+  project: d3-mpra
+  name: mpra-convolutional
   entity: d3-cshl
   tags: []
   notes: ""

@@ -7,23 +7,16 @@ inheriting from the base training classes and implementing MPRA-specific
 model creation and data loading.
 """
 
-import os
 import sys
 from pathlib import Path
-import numpy as np
-import random
-import torch
-import datetime
-
 
 # Package imports
-
 from scripts.train import BaseD3LightningModule, BaseD3DataModule, BaseTrainer, parse_base_args
 from model_zoo.mpra.models import create_model
 from model_zoo.mpra.data import get_mpra_datasets
 from model_zoo.mpra.sp_mse_callback import create_mpra_sp_mse_callback
 from omegaconf import OmegaConf
-from utils.utils import update_cfg_with_unknown_args
+
 
 class MPRALightningModule(BaseD3LightningModule):
     """Lightning module specifically for MPRA dataset."""
@@ -54,8 +47,10 @@ class MPRADataModule(BaseD3DataModule):
         
     def setup(self, stage: str = None):
         """Setup MPRA datasets."""
-        # Use MPRA-specific data loading
-        self.train_ds, self.val_ds, _ = get_mpra_datasets(self.cfg.paths.data_file)
+        _ = stage  # Unused parameter, required by Lightning interface
+        # Use MPRA-specific data loading with config data path
+        data_path = getattr(self.cfg.paths, 'data_file', None)
+        self.train_ds, self.val_ds, _ = get_mpra_datasets(data_path)
         print(f"MPRA dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
 
 
@@ -100,31 +95,20 @@ def main():
     """Main training function."""
     parser = parse_base_args()
     parser.description = 'MPRA Training Script'
-    args, unknown = parser.parse_known_args()
-
-    # Set all seeds for reproducibility
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
-
-    # Create trainer (loads cfg)
+    args = parser.parse_args()
+    
+    # Create trainer
     trainer = MPRATrainer(
         architecture=args.architecture,
         config_path=args.config,
-        work_dir=args.work_dir,
+        work_dir=args.work_dir
     )
-
+    
     # Override WandB settings if provided
     if args.wandb_project:
         trainer.cfg.wandb.project = args.wandb_project
     if args.wandb_name:
         trainer.cfg.wandb.name = args.wandb_name
-
-    # override other unknown args (e.g. --paths.data_file)
-    if unknown:
-        update_cfg_with_unknown_args(trainer.cfg, unknown)
     
     # Train
     try:

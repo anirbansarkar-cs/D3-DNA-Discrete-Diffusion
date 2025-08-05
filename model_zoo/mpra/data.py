@@ -2,9 +2,8 @@
 MPRA Dataset Loader
 
 This module provides dataset loading functionality specific to the MPRA dataset.
-It handles loading MPRA data format and provides appropriate preprocessing for D3 training.
-The dataset consists of one-hot encoded DNA sequences and their corresponding
-regulatory activity measurements from three cell lines (K562, HepG2, SK-N-SH).
+It handles loading MPRA (Massively Parallel Reporter Assay) data and provides
+appropriate preprocessing for D3 training.
 """
 
 import os
@@ -22,7 +21,7 @@ class MPRADataset(Dataset):
     
     Loads MPRA H5 files and provides proper preprocessing for D3 training.
     The dataset consists of one-hot encoded DNA sequences and their corresponding
-    regulatory activity labels from three cell lines (K562, HepG2, SK-N-SH).
+    regulatory activity measurements.
     """
     
     def __init__(self, h5_file_path: str, split: str = 'train'):
@@ -74,16 +73,19 @@ class MPRADataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def get_mpra_datasets(h5_file_path: str) -> Tuple[Dataset, Dataset, Dataset]:
+def get_mpra_datasets(h5_file_path: str = None) -> Tuple[Dataset, Dataset, Dataset]:
     """
-    Get MPRA train, validation, and test datasets.
+    Get MPRA train and validation datasets.
     
     Args:
-        h5_file_path: Path to the MPRA H5 data file
+        h5_file_path: Path to the MPRA H5 data file. If None, uses default location.
         
     Returns:
         Tuple of (train_dataset, valid_dataset, test_dataset)
     """
+    if h5_file_path is None:
+        h5_file_path = os.path.join('model_zoo', 'mpra', 'mpra_data.h5')
+    
     train_set = MPRADataset(h5_file_path, split='train')
     valid_set = MPRADataset(h5_file_path, split='valid')
     test_set = MPRADataset(h5_file_path, split='test')
