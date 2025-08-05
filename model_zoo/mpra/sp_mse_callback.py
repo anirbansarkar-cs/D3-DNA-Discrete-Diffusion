@@ -45,6 +45,9 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
         if self.oracle_model is None:
             raise RuntimeError("Oracle model not loaded")
         
+        # Ensure oracle model is on the correct device
+        self.oracle_model = self.oracle_model.to(device)
+        
         # Convert to one-hot if needed
         if sequences.dtype == torch.long:
             sequences_one_hot = F.one_hot(sequences, num_classes=4).float()
@@ -53,11 +56,11 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
         
         # MPRA expects input as (batch_size, channels, length)
         # Convert from (batch_size, length, channels) to (batch_size, channels, length)
-        sequences_input = sequences_one_hot.permute(0, 2, 1)
+        sequences_input = sequences_one_hot.permute(0, 2, 1).to(device)
         
-        # Get oracle predictions - predict_custom handles device placement internally
+        # Get oracle predictions
         with torch.no_grad():
-            predictions = self.oracle_model.predict_custom(sequences_input.cpu())
+            predictions = self.oracle_model.predict_custom(sequences_input)
         
         return predictions
     
