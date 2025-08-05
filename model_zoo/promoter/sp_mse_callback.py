@@ -8,6 +8,7 @@ inheriting from the base callback and providing Promoter-specific oracle loading
 import torch
 import torch.nn.functional as F
 import pandas as pd
+import numpy as np
 import os
 import re
 from typing import Tuple
@@ -84,7 +85,17 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         # Get SEI profile using the proper inference pattern
         predictions = self._get_sei_profile(sequences_one_hot, device)
         
-        return torch.tensor(predictions, device=device).unsqueeze(1)  # Add channel dim
+        # Convert to tensor and ensure proper shape
+        if isinstance(predictions, list):
+            predictions = torch.tensor(predictions, device=device)
+        else:
+            predictions = torch.from_numpy(predictions).to(device)
+        
+        # Ensure predictions is 1D and add channel dimension
+        if predictions.dim() == 0:
+            predictions = predictions.unsqueeze(0)
+        
+        return predictions.unsqueeze(1)  # Add channel dim
     
     def _get_sei_profile(self, seq_one_hot, device):
         """
