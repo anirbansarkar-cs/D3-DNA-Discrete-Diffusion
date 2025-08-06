@@ -137,8 +137,7 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
             sei_input, batch_size=batch_size, shuffle=False
         )
         
-        preds = torch.empty(0)
-        preds = preds.cpu()
+        all_preds = []
         
         for x in tqdm(dataloader, desc="Processing SEI batches", disable=True):
             x = x.to(device)
@@ -153,8 +152,14 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
                     pred = pred[:, h3k4me3_mask]
                 
                 # Take mean across H3K4me3 features
-                pred = pred.mean(dim=1, keepdim=True)  # Keep as tensor
-                preds = torch.cat((preds, pred), dim=0)
+                pred = pred.mean(dim=1)  # Shape: (batch_size,)
+                all_preds.append(pred)
+        
+        # Concatenate all predictions
+        if all_preds:
+            preds = torch.cat(all_preds, dim=0)
+        else:
+            preds = torch.empty(0)
         
         # Convert to numpy and return
         return preds.numpy().flatten()
