@@ -34,6 +34,7 @@ class DeepSTARREvaluator(BaseEvaluator):
     
     def __init__(self):
         super().__init__("DeepSTARR")
+        self._dataset_indices = None  # Store indices for matching original data
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
         """Load DeepSTARR model using dataset-specific model loading."""
@@ -62,7 +63,12 @@ class DeepSTARREvaluator(BaseEvaluator):
             import torch.utils.data as data_utils
             indices = torch.randperm(len(dataset))[:max_samples]
             dataset = data_utils.Subset(dataset, indices)
+            # Store the indices for matching original data later
+            self._dataset_indices = indices
             print(f"  ↳ DeepSTARR dataset limited to {len(dataset)} samples from {split} split")
+        else:
+            # Full dataset - no indices needed
+            self._dataset_indices = None
             
         # Use config batch size if not specified
         if batch_size is None:
@@ -107,12 +113,17 @@ class DeepSTARREvaluator(BaseEvaluator):
             return None
     
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
-        """Get original test data for SP-MSE comparison."""
+        """Get original test data for SP-MSE comparison, matching the limited dataset if applicable."""
         try:            
             # Load DeepSTARR test data h5  
             print(f"Loading original test data from: {data_path}")
             with h5py.File(data_path, 'r') as data_file:
                 X = torch.tensor(np.array(data_file['X_test']))
+            
+            # If we limited the dataset, apply the same indices to original data
+            if self._dataset_indices is not None:
+                print(f"  ↳ Applying same subset indices to original data ({len(self._dataset_indices)} samples)")
+                X = X[self._dataset_indices]
                 
             return X
         except Exception as e:
