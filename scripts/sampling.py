@@ -106,7 +106,7 @@ class Denoiser:
         return sample_categorical(probs)
                        
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, viz_logger=None):
     
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
@@ -115,12 +115,13 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
                                  steps=config.sampling.steps,
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
-                                 device=device)
+                                 device=device,
+                                 viz_logger=viz_logger)
     
     return sampling_fn
     
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, viz_logger=None):
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
     denoiser = Denoiser(graph, noise)
@@ -135,6 +136,25 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
         for i in range(steps):
             t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
             x = projector(x)
+            
+            # Capture visualization data before update
+            if viz_logger is not None:
+                # Get current noise level
+                sigma, dsigma = noise(t.squeeze())
+                
+                # Get score matrix for visualization
+                score_matrix = sampling_score_fn(x, sigma, labels)
+                
+                # Log the step data
+                viz_logger.log_step(
+                    step=i,
+                    timestep=timesteps[i].item(),
+                    sequences=x,
+                    score_matrix=score_matrix,
+                    noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
+                    noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item()
+                )
+            
             x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
             # print(x)
             
@@ -143,6 +163,21 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
             # denoising step
             x = projector(x)
             t = timesteps[-1] * torch.ones(x.shape[0], 1, device=device)
+            
+            # Capture final denoising step for visualization
+            if viz_logger is not None:
+                sigma = noise(t.squeeze())[0]
+                score_matrix = sampling_score_fn(x, sigma, labels)
+                
+                viz_logger.log_step(
+                    step=steps,  # Final denoising step
+                    timestep=timesteps[-1].item(),
+                    sequences=x,
+                    score_matrix=score_matrix,
+                    noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
+                    noise_rate=None  # No noise rate for final step
+                )
+            
             x = denoiser.update_fn(sampling_score_fn, x, labels, t)
             
         return x

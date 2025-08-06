@@ -80,7 +80,7 @@ class BaseEvaluator:
     
     def sample_sequences_for_evaluation(self, checkpoint_path: str, config: OmegaConf, 
                                        dataloader, num_steps: int, architecture: str = 'transformer', 
-                                       show_progress: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+                                       show_progress: bool = False, viz_logger=None, oracle_model=None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Sample sequences for evaluation using PC sampler.
         
@@ -91,6 +91,8 @@ class BaseEvaluator:
             num_steps: Number of sampling steps
             architecture: Architecture type
             show_progress: Whether to show progress bar during sampling
+            viz_logger: Optional visualization data logger
+            oracle_model: Optional oracle model for MSE computation during sampling
             
         Returns:
             Tuple of (sampled_sequences, target_labels)
@@ -107,10 +109,28 @@ class BaseEvaluator:
         # Get batch size from dataloader
         batch_size = dataloader.batch_size
         
-        # Create PC sampler once (will be reused for all batches)
-        sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (batch_size, sequence_length), 'analytic', num_steps, device=self.device
-        )
+        # Update visualization logger with noise schedule metadata
+        if viz_logger is not None:
+            noise_config = {
+                'type': getattr(config.noise, 'type', 'geometric'),
+                'sigma_min': getattr(config.noise, 'sigma_min', 1e-3),
+                'sigma_max': getattr(config.noise, 'sigma_max', 1.0)
+            }
+            viz_logger.update_noise_schedule_metadata(noise_config)
+        
+        # Create special PC sampler for evaluation with visualization and oracle MSE
+        if viz_logger is not None and oracle_model is not None:
+            # Use a custom sampling function that captures oracle MSE at each step
+            sampling_fn = self._get_evaluation_pc_sampler_with_viz(
+                graph, noise, (batch_size, sequence_length), num_steps, 
+                viz_logger, oracle_model
+            )
+        else:
+            # Regular PC sampler with optional visualization
+            sampling_fn = sampling.get_pc_sampler(
+                graph, noise, (batch_size, sequence_length), 'analytic', num_steps, 
+                device=self.device, viz_logger=viz_logger
+            )
         
         sampled_sequences = []
         all_targets = []
@@ -124,9 +144,16 @@ class BaseEvaluator:
             
             # If last batch has different size, create new sampling function
             if current_batch_size != batch_size:
-                sampling_fn = sampling.get_pc_sampler(
-                    graph, noise, (current_batch_size, sequence_length), 'analytic', num_steps, device=self.device
-                )
+                if viz_logger is not None and oracle_model is not None:
+                    sampling_fn = self._get_evaluation_pc_sampler_with_viz(
+                        graph, noise, (current_batch_size, sequence_length), num_steps,
+                        viz_logger, oracle_model
+                    )
+                else:
+                    sampling_fn = sampling.get_pc_sampler(
+                        graph, noise, (current_batch_size, sequence_length), 'analytic', num_steps, 
+                        device=self.device, viz_logger=viz_logger
+                    )
             
             # Sample sequences conditioned on targets
             sample = sampling_fn(model, targets.to(self.device))
@@ -139,6 +166,91 @@ class BaseEvaluator:
         all_targets = torch.cat(all_targets, dim=0)
         
         return all_samples, all_targets
+    
+    def _get_evaluation_pc_sampler_with_viz(self, graph, noise, batch_dims, steps, viz_logger, oracle_model):
+        """
+        Create a PC sampler that captures oracle MSE at each step during evaluation.
+        
+        This is a specialized version for evaluation that computes oracle MSE predictions
+        at each step and logs them with the visualization data.
+        """
+        from scripts.sampling import get_predictor, Denoiser
+        from utils.utils import get_score_fn
+        import torch.nn.functional as F
+        
+        predictor = get_predictor('analytic')(graph, noise)
+        denoiser = Denoiser(graph, noise)
+        eps = 1e-5
+        
+        @torch.no_grad()
+        def evaluation_pc_sampler_with_viz(model, labels):
+            sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+            x = graph.sample_limit(*batch_dims).to(self.device)
+            timesteps = torch.linspace(1, eps, steps + 1, device=self.device)
+            dt = (1 - eps) / steps
+
+            for i in range(steps):
+                t = timesteps[i] * torch.ones(x.shape[0], 1, device=self.device)
+                
+                # Get current noise level and score matrix
+                sigma, dsigma = noise(t.squeeze())
+                score_matrix = sampling_score_fn(x, sigma, labels)
+                
+                # Compute oracle MSE for current sequences
+                oracle_mse = None
+                if oracle_model is not None:
+                    try:
+                        # Convert sequences to one-hot for oracle prediction
+                        x_one_hot = F.one_hot(x, num_classes=4).float()
+                        oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
+                        
+                        # For evaluation, we can compute MSE against ground truth activity
+                        # This is a simplified version - the exact MSE computation depends on dataset
+                        oracle_mse = oracle_predictions.pow(2).mean(dim=-1)  # Simplified MSE
+                    except Exception as e:
+                        print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
+                        oracle_mse = None
+                
+                # Log the step data
+                viz_logger.log_step(
+                    step=i,
+                    timestep=timesteps[i].item(),
+                    sequences=x,
+                    score_matrix=score_matrix,
+                    noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
+                    noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
+                    oracle_mse=oracle_mse
+                )
+                
+                x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
+
+            # Final denoising step
+            x = denoiser.update_fn(sampling_score_fn, x, labels, timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device))
+            
+            return x
+        
+        return evaluation_pc_sampler_with_viz
+    
+    def get_oracle_predictions_for_viz(self, sequences: torch.Tensor, oracle_model) -> torch.Tensor:
+        """
+        Get oracle predictions for sequences during visualization.
+        Can be overridden by subclasses for dataset-specific oracle handling.
+        
+        Args:
+            sequences: One-hot encoded sequences (batch_size, seq_length, 4)
+            oracle_model: Oracle model
+            
+        Returns:
+            Oracle predictions tensor
+        """
+        # Default implementation - subclasses should override for specific datasets
+        if hasattr(oracle_model, 'predict_custom'):
+            # Convert from (batch, length, channels) to (batch, channels, length)
+            sequences_input = sequences.permute(0, 2, 1).to(self.device)
+            return oracle_model.predict_custom(sequences_input)
+        else:
+            # Fallback
+            return torch.zeros(sequences.shape[0], device=self.device)
     
     def get_sequence_length(self, config: OmegaConf) -> int:
         """
@@ -230,7 +342,9 @@ class BaseEvaluator:
                               oracle_checkpoint: str, data_path: str,
                               split: str = 'test', steps: Optional[int] = None, 
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
-                              show_progress: bool = False, save_sequences: bool = False) -> Dict[str, Any]:
+                              show_progress: bool = False, save_sequences: bool = False,
+                              save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                              viz_format: str = 'hdf5') -> Dict[str, Any]:
         """
         Evaluate model by sampling sequences and computing SP-MSE with oracle.
         
@@ -245,6 +359,9 @@ class BaseEvaluator:
             architecture: Architecture type
             show_progress: Whether to show progress bar during sampling
             save_sequences: Whether to save sampled sequences as NPZ file
+            save_visualization_data: Whether to save intermediate sampling data
+            viz_output_path: Output path for visualization data
+            viz_format: Format for visualization data ('hdf5', 'npz')
             
         Returns:
             Dictionary of evaluation results including SP-MSE
@@ -259,10 +376,37 @@ class BaseEvaluator:
         # Create dataloader
         dataloader = self.create_dataloader(config, split, batch_size)
         
+        # Load oracle model first (needed for visualization if enabled)
+        print("Loading oracle model for SP-MSE evaluation...")
+        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
+        
+        if oracle_model is None:
+            return {
+                'error': 'oracle_model_not_loaded',
+                'sampling_steps': steps
+            }
+        
+        # Create visualization logger if requested
+        viz_logger = None
+        if save_visualization_data:
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            viz_logger = create_visualization_logger(
+                num_samples=len(dataloader.dataset),
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                split=split,
+                save_oracle_mse=True,  # Enable oracle MSE for evaluation
+                device=self.device
+            )
+            print("  ↳ Visualization data logging enabled with oracle MSE")
+        
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
         sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
-            checkpoint_path, config, dataloader, steps, architecture, show_progress
+            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model
         )
         
         # Save sequences as NPZ if requested
@@ -271,18 +415,6 @@ class BaseEvaluator:
             checkpoint_dir = os.path.dirname(checkpoint_path)
             npz_path = os.path.join(checkpoint_dir, "sample.npz")
             self.save_sequences_as_npz(sampled_sequences, npz_path)
-        
-        # Load oracle model
-        print("Loading oracle model for SP-MSE evaluation...")
-        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
-        
-        if oracle_model is None:
-            return {
-                'error': 'oracle_model_not_loaded',
-                'num_samples': sampled_sequences.shape[0],
-                'sequence_length': sampled_sequences.shape[1],
-                'sampling_steps': steps
-            }
         
         # Get original test data for comparison
         original_data = self.get_original_test_data(data_path)
@@ -300,6 +432,16 @@ class BaseEvaluator:
             'sp_mse': sp_mse,
             'oracle_evaluation': 'completed'
         }
+        
+        # Save visualization data if requested
+        if save_visualization_data and viz_logger is not None:
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"evaluation_visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
         
         print(f"SP-MSE: {sp_mse:.6f}")
         
@@ -391,6 +533,11 @@ def parse_base_args():
     parser.add_argument('--show_progress', action='store_true', help='Show progress bar during sampling')
     parser.add_argument('--save_sequences', action='store_true', help='Save sampled sequences as NPZ file')
     
+    # Visualization data arguments
+    parser.add_argument('--save_viz_data', action='store_true', help='Save visualization data (sequences, scores, noise levels, oracle MSE)')
+    parser.add_argument('--viz_output', help='Output path for visualization data')
+    parser.add_argument('--viz_format', choices=['hdf5', 'h5', 'npz'], default='hdf5', help='Visualization data format')
+    
     return parser
 
 
@@ -431,13 +578,16 @@ def main_evaluate(evaluator: BaseEvaluator, args):
         checkpoint_path=args.checkpoint,
         config=config,
         oracle_checkpoint=args.oracle_checkpoint,
-        data_path=getattr(args, 'data_file', None),
+        data_path=args.data_path,
         split=args.split,
-        steps=getattr(args, 'steps', None),
+        steps=args.steps,
         batch_size=args.batch_size,
         architecture=args.architecture,
         show_progress=show_progress,
-        save_sequences=args.save_sequences
+        save_sequences=args.save_sequences,
+        save_visualization_data=args.save_viz_data,
+        viz_output_path=args.viz_output,
+        viz_format=args.viz_format
     )
     
     # Print results

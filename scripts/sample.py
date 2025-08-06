@@ -116,7 +116,8 @@ class BaseSampler:
     
     def sample_sequences_with_pc_sampler(self, checkpoint_path: str, config: OmegaConf, 
                                        num_samples: int, steps: int, architecture: str = 'transformer',
-                                       conditioning_labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+                                       conditioning_labels: Optional[torch.Tensor] = None,
+                                       viz_logger=None) -> torch.Tensor:
         """
         Sample sequences using the proper PC sampler.
         
@@ -127,6 +128,7 @@ class BaseSampler:
             steps: Number of sampling steps
             architecture: Architecture type
             conditioning_labels: Optional conditioning labels (if None, generates random)
+            viz_logger: Optional visualization data logger
             
         Returns:
             Sampled sequences tensor
@@ -141,9 +143,19 @@ class BaseSampler:
         if conditioning_labels is None:
             conditioning_labels = self.generate_conditioning_labels(num_samples, config)
         
-        # Create PC sampler
+        # Update visualization logger with noise schedule metadata
+        if viz_logger is not None:
+            noise_config = {
+                'type': getattr(config.noise, 'type', 'geometric'),
+                'sigma_min': getattr(config.noise, 'sigma_min', 1e-3),
+                'sigma_max': getattr(config.noise, 'sigma_max', 1.0)
+            }
+            viz_logger.update_noise_schedule_metadata(noise_config)
+        
+        # Create PC sampler with visualization support
         sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (num_samples, sequence_length), 'analytic', steps, device=self.device
+            graph, noise, (num_samples, sequence_length), 'analytic', steps, 
+            device=self.device, viz_logger=viz_logger
         )
         
         # Sample sequences
@@ -223,7 +235,9 @@ class BaseSampler:
     
     def sample_and_save(self, checkpoint_path: str, config: OmegaConf, num_samples: int, steps: int,
                        architecture: str = 'transformer', conditioning_labels: Optional[torch.Tensor] = None,
-                       output_path: Optional[str] = None, format: str = 'npz') -> Dict[str, Any]:
+                       output_path: Optional[str] = None, format: str = 'npz', 
+                       save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                       viz_format: str = 'hdf5') -> Dict[str, Any]:
         """
         Main sampling method - just samples and saves (no evaluation).
         
@@ -236,15 +250,34 @@ class BaseSampler:
             conditioning_labels: Optional conditioning labels
             output_path: Output file path (optional, auto-generated if None)
             format: Output format ('npz', 'fasta', 'csv')
+            save_visualization_data: Whether to save intermediate sampling data
+            viz_output_path: Output path for visualization data
+            viz_format: Format for visualization data ('hdf5', 'npz')
             
         Returns:
             Dictionary of sampling results
         """
         print(f"Sampling {num_samples} {self.dataset_name} sequences using PC sampler with {steps} steps...")
         
+        # Create visualization logger if requested
+        viz_logger = None
+        if save_visualization_data:
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            viz_logger = create_visualization_logger(
+                num_samples=num_samples,
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                save_oracle_mse=False,  # No oracle MSE for sampling
+                device=self.device
+            )
+            print("  ↳ Visualization data logging enabled")
+        
         # Sample sequences
         sampled_sequences = self.sample_sequences_with_pc_sampler(
-            checkpoint_path, config, num_samples, steps, architecture, conditioning_labels
+            checkpoint_path, config, num_samples, steps, architecture, conditioning_labels, viz_logger
         )
         
         results = {
@@ -262,6 +295,16 @@ class BaseSampler:
         
         self.save_sequences(sampled_sequences, output_path, format)
         results['output_path'] = output_path
+        
+        # Save visualization data if requested
+        if save_visualization_data and viz_logger is not None:
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
         
         return results
 
@@ -393,6 +436,11 @@ def parse_base_args():
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size for sampling')
     parser.add_argument('--format', choices=['npz', 'fasta', 'csv', 'h5', 'hdf5', 'pt'], default='h5', help='Output format')
     
+    # Visualization data arguments
+    parser.add_argument('--save_viz_data', action='store_true', help='Save visualization data (sequences, scores, noise levels)')
+    parser.add_argument('--viz_output', help='Output path for visualization data')
+    parser.add_argument('--viz_format', choices=['hdf5', 'h5', 'npz'], default='hdf5', help='Visualization data format')
+    
     return parser
 
 
@@ -455,7 +503,10 @@ def main_sample(sampler: BaseSampler, args):
         steps=steps,
         architecture=args.architecture,
         output_path=args.output,
-        format=args.format
+        format=args.format,
+        save_visualization_data=args.save_viz_data,
+        viz_output_path=args.viz_output,
+        viz_format=args.viz_format
     )
     
     # Print results

@@ -115,9 +115,11 @@ class DeepSTARREvaluator(BaseEvaluator):
                               oracle_checkpoint: str, data_path: str,
                               split: str = 'test', steps: Optional[int] = None, 
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
-                              show_progress: bool = False, save_sequences: bool = False):
+                              show_progress: bool = False, save_sequences: bool = False,
+                              save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                              viz_format: str = 'hdf5'):
         """
-        Override base method to pass EvoAug oracle flag from config.
+        Override base method to pass EvoAug oracle flag from config and handle visualization.
         """
         print(f"Evaluating {self.dataset_name} on {split} split with sampling...")
         
@@ -129,19 +131,6 @@ class DeepSTARREvaluator(BaseEvaluator):
         # Create dataloader
         dataloader = self.create_dataloader(config, split, batch_size)
         
-        # Sample sequences using PC sampler
-        print(f"Sampling sequences with PC sampler ({steps} steps)...")
-        sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
-            checkpoint_path, config, dataloader, steps, architecture, show_progress
-        )
-        
-        # Save sequences as NPZ if requested
-        if save_sequences:
-            # Create output path based on checkpoint directory
-            checkpoint_dir = os.path.dirname(checkpoint_path)
-            npz_path = os.path.join(checkpoint_dir, "sample.npz")
-            self.save_sequences_as_npz(sampled_sequences, npz_path)
-        
         # Load oracle model with EvoAug flag from config
         print("Loading oracle model for SP-MSE evaluation...")
         use_evoaug_oracle = getattr(config.eval, 'use_evoaug_oracle', False)
@@ -150,10 +139,38 @@ class DeepSTARREvaluator(BaseEvaluator):
         if oracle_model is None:
             return {
                 'error': 'oracle_model_not_loaded',
-                'num_samples': sampled_sequences.shape[0],
-                'sequence_length': sampled_sequences.shape[1],
                 'sampling_steps': steps
             }
+        
+        # Create visualization logger if requested
+        viz_logger = None
+        if save_visualization_data:
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            viz_logger = create_visualization_logger(
+                num_samples=len(dataloader.dataset),
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                split=split,
+                save_oracle_mse=True,  # Enable oracle MSE for evaluation
+                device=self.device
+            )
+            print("  ↳ Visualization data logging enabled with oracle MSE")
+        
+        # Sample sequences using PC sampler
+        print(f"Sampling sequences with PC sampler ({steps} steps)...")
+        sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
+            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model
+        )
+        
+        # Save sequences as NPZ if requested
+        if save_sequences:
+            # Create output path based on checkpoint directory
+            checkpoint_dir = os.path.dirname(checkpoint_path)
+            npz_path = os.path.join(checkpoint_dir, "sample.npz")
+            self.save_sequences_as_npz(sampled_sequences, npz_path)
         
         # Get original test data for comparison
         original_data = self.get_original_test_data(data_path)
@@ -173,9 +190,38 @@ class DeepSTARREvaluator(BaseEvaluator):
             'use_evoaug_oracle': use_evoaug_oracle
         }
         
+        # Save visualization data if requested
+        if save_visualization_data and viz_logger is not None:
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"deepstarr_evaluation_visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
+        
         print(f"SP-MSE: {sp_mse:.6f}")
         
         return results
+    
+    def get_oracle_predictions_for_viz(self, sequences: torch.Tensor, oracle_model) -> torch.Tensor:
+        """
+        DeepSTARR-specific oracle predictions for visualization.
+        
+        Args:
+            sequences: One-hot encoded sequences (batch_size, seq_length, 4)
+            oracle_model: DeepSTARR oracle model
+            
+        Returns:
+            Oracle predictions tensor (batch_size, 2) for Dev and Hk activities
+        """
+        if hasattr(oracle_model, 'predict_custom'):
+            # Convert from (batch, length, channels) to (batch, channels, length)
+            sequences_input = sequences.permute(0, 2, 1).to(self.device)
+            return oracle_model.predict_custom(sequences_input)
+        else:
+            # Fallback
+            return torch.zeros(sequences.shape[0], 2, device=self.device)
 
 
 def load_default_config():
@@ -232,7 +278,10 @@ def main():
         batch_size=args.batch_size,
         architecture=args.architecture,
         show_progress=args.show_progress,
-        save_sequences=args.save_sequences
+        save_sequences=args.save_sequences,
+        save_visualization_data=getattr(args, 'save_viz_data', False),
+        viz_output_path=getattr(args, 'viz_output', None),
+        viz_format=getattr(args, 'viz_format', 'hdf5')
     )
     
     # Print and save results
