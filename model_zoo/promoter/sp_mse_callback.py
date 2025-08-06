@@ -122,10 +122,11 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         pad_size = (4096 - seq_len) // 2
         
         # Create padded sequences with uniform background (0.25 for each nucleotide)
+        # Ensure padding tensors are on the same device as the input
         padded_seqs = torch.cat([
-            torch.ones((B, pad_size, 4)) * 0.25,
+            torch.ones((B, pad_size, 4), device=seq_one_hot.device) * 0.25,
             seq_one_hot,
-            torch.ones((B, pad_size, 4)) * 0.25
+            torch.ones((B, pad_size, 4), device=seq_one_hot.device) * 0.25
         ], dim=1)  # (B, 4096, 4)
         
         # Convert to channels-first format: (B, 4, 4096)
