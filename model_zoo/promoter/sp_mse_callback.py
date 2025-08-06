@@ -105,7 +105,7 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
     
     def _get_sei_profile(self, seq_one_hot, device):
         """
-        Get SEI profile - FIXED VERSION.
+        Get SEI profile using DataLoader pattern like working implementations.
         
         Args:
             seq_one_hot: One-hot encoded sequences (batch_size, seq_length, 4)
@@ -114,91 +114,50 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
         Returns:
             H3K4me3 predictions (batch_size,)
         """
-        B, _, _ = seq_one_hot.shape
-        
-        # Process in smaller batches to avoid GPU memory issues
-        batch_size = min(8, B)  # Further reduced batch size for safety
-        all_predictions = []
-        
-        # Ensure oracle model is on correct device and in eval mode
+        # Ensure oracle model is in eval mode
         self.oracle_model.eval()
         
-        for i in tqdm(range(0, B, batch_size), desc="Processing SEI batches", disable=True):
-            end_idx = min(i + batch_size, B)
-            batch_seq = seq_one_hot[i:end_idx].cpu()  # Ensure starts on CPU
-            batch_B = batch_seq.shape[0]
+        # Prepare padded sequences (SEI expects 4096 length)
+        B, seq_len, _ = seq_one_hot.shape
+        pad_size = (4096 - seq_len) // 2
+        
+        # Create padded sequences with uniform background (0.25 for each nucleotide)
+        padded_seqs = torch.cat([
+            torch.ones((B, pad_size, 4)) * 0.25,
+            seq_one_hot,
+            torch.ones((B, pad_size, 4)) * 0.25
+        ], dim=1)  # (B, 4096, 4)
+        
+        # Convert to channels-first format: (B, 4, 4096)
+        sei_input = padded_seqs.transpose(1, 2)
+        
+        # Use DataLoader pattern like working implementations
+        batch_size = 8  # Small batch size for SEI memory requirements
+        dataloader = torch.utils.data.DataLoader(
+            sei_input, batch_size=batch_size, shuffle=False
+        )
+        
+        preds = torch.empty(0)
+        preds = preds.cpu()
+        
+        for x in tqdm(dataloader, desc="Processing SEI batches", disable=True):
+            x = x.to(device)
             
-            # Initialize variables for cleanup
-            sei_inp = None
-            sei_out = None
-            
-            try:
-                # Pad sequence to 4096 length as expected by SEI
-                # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
-                sei_inp = torch.cat([
-                    torch.ones((batch_B, 4, 1536)) * 0.25,
-                    batch_seq.transpose(1, 2),  # Convert to (batch, channels, length)
-                    torch.ones((batch_B, 4, 1536)) * 0.25
-                ], 2)  # batch_B x 4 x 4,096
+            with torch.no_grad():
+                pred = self.oracle_model(x)
+                pred = pred.detach().cpu()
                 
-                # FIXED: Use blocking transfer to ensure completion before proceeding
-                sei_inp = sei_inp.to(device)  # Removed non_blocking=True
-                
-                with torch.no_grad():
-                    sei_out = self.oracle_model(sei_inp)
-                    
-                    # FIXED: Ensure tensor is detached before moving to CPU
-                    sei_out = sei_out.detach()
-                    
-                    # Move to CPU with explicit synchronization
-                    if device.type == 'cuda':
-                        torch.cuda.synchronize()  # Ensure GPU operations complete
-                    
-                    sei_out = sei_out.cpu().numpy()  # batch_B x 21,907
-                
-                # Filter for H3K4me3 features if SEI features are available
+                # Filter for H3K4me3 features if available
                 if self.sei_features is not None:
                     h3k4me3_mask = self.sei_features[1].str.strip().values == 'H3K4me3'
-                    sei_out = sei_out[:, h3k4me3_mask]  # batch_B x 2,350 (H3K4me3 features)
+                    pred = pred[:, h3k4me3_mask]
                 
-                # Take mean across H3K4me3 features for this batch
-                batch_pred = sei_out.mean(axis=1)  # batch_B
-                all_predictions.append(batch_pred)
-                
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    print(f"GPU OOM, skipping batch {i}-{end_idx}")
-                    # Return zeros for this batch as fallback
-                    all_predictions.append(np.zeros(batch_B))
-                    
-                    # Clean up and try to recover
-                    if device.type == 'cuda':
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
-                else:
-                    print(f"Unexpected error in SEI processing: {e}")
-                    # Return zeros for this batch
-                    all_predictions.append(np.zeros(batch_B))
-            
-            except Exception as e:
-                print(f"Unexpected error in SEI batch processing: {e}")
-                all_predictions.append(np.zeros(batch_B))
-            
-            finally:
-                # FIXED: Proper cleanup with synchronization
-                if sei_inp is not None:
-                    # Ensure all operations on tensor complete before deletion
-                    if device.type == 'cuda':
-                        torch.cuda.synchronize()
-                    del sei_inp
-                
-                if sei_out is not None:
-                    del sei_out
+                # Take mean across H3K4me3 features
+                pred = pred.mean(dim=1, keepdim=True)  # Keep as tensor
+                preds = torch.cat((preds, pred), dim=0)
         
-        # Concatenate all batch predictions
-        predh3k4me3 = np.concatenate(all_predictions, axis=0)  # B
-        
-        return predh3k4me3
+        # Convert to numpy and return
+        return preds.numpy().flatten()
 
     def process_batch(self, batch) -> Tuple[torch.Tensor, torch.Tensor]:
         """
