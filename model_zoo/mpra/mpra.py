@@ -368,26 +368,26 @@ class PL_MPRA(pl.LightningModule):
     def predict_custom(self, X, keepgrad=False):
         """Custom prediction function with batch processing."""
         self.model.eval()
+        
+        device = next(self.model.parameters()).device
+        
+        if X.device != device:
+            X = X.to(device)
+        
         dataloader = torch.utils.data.DataLoader(
-            X, batch_size=self.batch_size, shuffle=False
+            X, batch_size=self.batch_size, shuffle=False, pin_memory=False
         )
-        preds = torch.empty(0)
         
-        # Get the actual device the model is on, not self.device which may be stale
-        model_device = next(self.model.parameters()).device
-        
-        if keepgrad:
-            preds = preds.to(model_device)
-        else:
-            preds = preds.cpu()
+        preds = []
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
-            pred = self.model(x.to(model_device))  # Use actual model device
-            if not keepgrad:
-                pred = pred.detach().cpu()
-            preds = torch.cat((preds, pred), axis=0)
-        
-        return preds
+            with torch.no_grad():
+                pred = self.model(x)
+                if not keepgrad:
+                    pred = pred.detach().cpu()
+                preds.append(pred)
+                
+        return torch.cat(preds, axis=0)
 
     def predict_custom_mcdropout(self, X, seed=41, keepgrad=False):
         """Prediction with Monte Carlo dropout for uncertainty estimation."""
