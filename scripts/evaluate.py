@@ -294,6 +294,12 @@ class BaseEvaluator:
             SP-MSE score
         """
         
+        # Safety check: ensure original data matches the number of sampled sequences
+        num_samples = sampled_sequences.shape[0]
+        if original_data.shape[0] != num_samples:
+            print(f"  ⚠️  Warning: Original data has {original_data.shape[0]} samples but sampled {num_samples}. Using first {num_samples} for SP-MSE.")
+            original_data = original_data[:num_samples]
+        
         # Get oracle predictions for original and generated data
         val_score = oracle_model.predict_custom(original_data.to(self.device))
         val_pred_score = oracle_model.predict_custom(sampled_sequences.permute(0, 2, 1).to(self.device))
