@@ -41,8 +41,8 @@ class DeepSTARREvaluator(BaseEvaluator):
         
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
-        """Create DeepSTARR dataloader."""
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
+        """Create DeepSTARR dataloader with optional sample limiting."""
         # Load datasets
         train_ds, val_ds, test_ds = get_deepstarr_datasets(config.paths.data_file)
         
@@ -55,6 +55,14 @@ class DeepSTARREvaluator(BaseEvaluator):
             dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
+        
+        # Limit dataset size if max_samples is specified
+        if max_samples is not None and len(dataset) > max_samples:
+            # Create random subset
+            import torch.utils.data as data_utils
+            indices = torch.randperm(len(dataset))[:max_samples]
+            dataset = data_utils.Subset(dataset, indices)
+            print(f"  ↳ DeepSTARR dataset limited to {len(dataset)} samples from {split} split")
             
         # Use config batch size if not specified
         if batch_size is None:
@@ -117,7 +125,7 @@ class DeepSTARREvaluator(BaseEvaluator):
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
                               show_progress: bool = False, save_sequences: bool = False,
                               save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
-                              viz_format: str = 'hdf5'):
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None):
         """
         Override base method to pass EvoAug oracle flag from config and handle visualization.
         """
@@ -128,8 +136,8 @@ class DeepSTARREvaluator(BaseEvaluator):
             steps = self.get_sequence_length(config)
             print(f"Using default steps: {steps} (sequence length)")
         
-        # Create dataloader
-        dataloader = self.create_dataloader(config, split, batch_size)
+        # Create dataloader with optional sample limiting
+        dataloader = self.create_dataloader(config, split, batch_size, max_samples)
         
         # Load oracle model with EvoAug flag from config
         print("Loading oracle model for SP-MSE evaluation...")
@@ -277,11 +285,12 @@ def main():
         steps=args.steps,
         batch_size=args.batch_size,
         architecture=args.architecture,
-        show_progress=args.show_progress,
+        show_progress=getattr(args, 'show_progress', False),  # DeepSTARR default: False
         save_sequences=args.save_sequences,
         save_visualization_data=getattr(args, 'save_viz_data', False),
         viz_output_path=getattr(args, 'viz_output', None),
-        viz_format=getattr(args, 'viz_format', 'hdf5')
+        viz_format=getattr(args, 'viz_format', 'hdf5'),
+        max_samples=getattr(args, 'max_samples', None)
     )
     
     # Print and save results

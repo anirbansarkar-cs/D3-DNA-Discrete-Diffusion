@@ -48,7 +48,7 @@ class BaseEvaluator:
         """
         raise NotImplementedError("Subclasses must implement load_model()")
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
         """
         Create dataloader for evaluation. Must be implemented by subclasses.
         
@@ -56,6 +56,7 @@ class BaseEvaluator:
             config: Configuration object
             split: Dataset split ('train', 'val', 'test')
             batch_size: Batch size (if None, uses config default)
+            max_samples: Maximum number of samples to evaluate (if None, uses entire dataset)
             
         Returns:
             DataLoader instance
@@ -344,7 +345,7 @@ class BaseEvaluator:
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
                               show_progress: bool = False, save_sequences: bool = False,
                               save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
-                              viz_format: str = 'hdf5') -> Dict[str, Any]:
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None) -> Dict[str, Any]:
         """
         Evaluate model by sampling sequences and computing SP-MSE with oracle.
         
@@ -362,6 +363,7 @@ class BaseEvaluator:
             save_visualization_data: Whether to save intermediate sampling data
             viz_output_path: Output path for visualization data
             viz_format: Format for visualization data ('hdf5', 'npz')
+            max_samples: Maximum number of samples to evaluate (if None, uses entire dataset)
             
         Returns:
             Dictionary of evaluation results including SP-MSE
@@ -373,8 +375,12 @@ class BaseEvaluator:
             steps = self.get_sequence_length(config)
             print(f"Using default steps: {steps} (sequence length)")
         
-        # Create dataloader
-        dataloader = self.create_dataloader(config, split, batch_size)
+        # Create dataloader with optional sample limiting
+        dataloader = self.create_dataloader(config, split, batch_size, max_samples)
+        
+        # Print evaluation info
+        if max_samples is not None:
+            print(f"  ↳ Limiting evaluation to {max_samples} samples (randomly selected)")
         
         # Load oracle model first (needed for visualization if enabled)
         print("Loading oracle model for SP-MSE evaluation...")
@@ -391,8 +397,9 @@ class BaseEvaluator:
         if save_visualization_data:
             from utils.visualization_logger import create_visualization_logger
             sequence_length = self.get_sequence_length(config)
+            actual_samples = len(dataloader.dataset)
             viz_logger = create_visualization_logger(
-                num_samples=len(dataloader.dataset),
+                num_samples=actual_samples,
                 sequence_length=sequence_length,
                 num_steps=steps,
                 dataset_name=self.dataset_name,
@@ -401,7 +408,7 @@ class BaseEvaluator:
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
                 device=self.device
             )
-            print("  ↳ Visualization data logging enabled with oracle MSE")
+            print(f"  ↳ Visualization data logging enabled with oracle MSE ({actual_samples} samples)")
         
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
@@ -538,6 +545,9 @@ def parse_base_args():
     parser.add_argument('--viz_output', help='Output path for visualization data')
     parser.add_argument('--viz_format', choices=['hdf5', 'h5', 'npz'], default='hdf5', help='Visualization data format')
     
+    # Evaluation sample limiting
+    parser.add_argument('--max_samples', type=int, help='Maximum number of samples to evaluate (randomly selected if less than dataset size)')
+    
     return parser
 
 
@@ -587,7 +597,8 @@ def main_evaluate(evaluator: BaseEvaluator, args):
         save_sequences=args.save_sequences,
         save_visualization_data=args.save_viz_data,
         viz_output_path=args.viz_output,
-        viz_format=args.viz_format
+        viz_format=args.viz_format,
+        max_samples=args.max_samples
     )
     
     # Print results
