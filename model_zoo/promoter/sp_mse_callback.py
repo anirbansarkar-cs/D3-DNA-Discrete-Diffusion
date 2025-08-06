@@ -145,7 +145,6 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
             
             with torch.no_grad():
                 pred = self.oracle_model(x)
-                pred = pred.detach().cpu()
                 
                 # Filter for H3K4me3 features if available
                 if self.sei_features is not None:
@@ -154,7 +153,14 @@ class PromoterSPMSECallback(BaseSPMSEValidationCallback):
                 
                 # Take mean across H3K4me3 features
                 pred = pred.mean(dim=1)  # Shape: (batch_size,)
-                all_preds.append(pred)
+                
+                # Move to CPU and detach to avoid CUDA memory issues
+                pred_cpu = pred.detach().cpu()
+                all_preds.append(pred_cpu)
+                
+                # Clear CUDA cache to prevent memory accumulation
+                if torch.cuda.is_available() and device.type == 'cuda':
+                    torch.cuda.empty_cache()
         
         # Concatenate all predictions
         if all_preds:
