@@ -304,30 +304,23 @@ class LentIMPRAEvaluator(BaseEvaluator):
             print(f"Warning: Could not get oracle predictions for visualization: {e}")
             return torch.zeros(sequences.shape[0], device=self.device)
     
-    def create_evaluation_sampler_with_viz(self, model, config, oracle_model=None):
-        """Create PC sampler function with visualization support and oracle MSE computation."""
+    def _get_evaluation_pc_sampler_with_viz(self, graph, noise, batch_dims, steps, viz_logger, oracle_model):
+        """Create a PC sampler that captures oracle MSE at each step during evaluation (LentIMPRA-specific)."""
+        from scripts.sampling import get_predictor, Denoiser
+        from utils.utils import get_score_fn
         import torch.nn.functional as F
-        from scripts import sampling
         
-        def evaluation_pc_sampler_with_viz(shape, labels, steps, viz_logger=None, show_progress=False):
-            # Set up SDE and sampling components
-            sde, _, _ = sampling.get_pc_sampler(model, config, None, shape[0], self.device) 
-            sampling_score_fn = sampling.get_sampling_fn(sde, model, config, self.device)
-            
-            # Create predictor and corrector
-            predictor = sampling.ReverseDiffusionPredictor(sde, sampling_score_fn, probability_flow=False)
-            corrector = sampling.LangevinCorrector(sde, sampling_score_fn, snr=config.sampling.snr, n_steps=config.sampling.corrector_steps)
-            
-            # Initialize
-            x = sde.prior_sampling(shape[0]).to(self.device)
-            labels = labels.to(self.device)
-            
-            # Set up timesteps 
-            eps = sampling.eps
-            timesteps = torch.linspace(sde.T, eps, steps, device=self.device)
+        predictor = get_predictor('analytic')(graph, noise)
+        denoiser = Denoiser(graph, noise)
+        eps = 1e-5
+        
+        @torch.no_grad()
+        def evaluation_pc_sampler_with_viz(model, labels):
+            sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+            x = graph.sample_limit(*batch_dims).to(self.device)
+            timesteps = torch.linspace(1, eps, steps + 1, device=self.device)
             dt = (1 - eps) / steps
-            noise = sde.noise_schedule
-            
+
             for i in range(steps):
                 t = timesteps[i] * torch.ones(x.shape[0], 1, device=self.device)
                 
@@ -335,7 +328,7 @@ class LentIMPRAEvaluator(BaseEvaluator):
                 sigma, dsigma = noise(t.squeeze())
                 score_matrix = sampling_score_fn(x, sigma, labels)
                 
-                # Compute oracle MSE for current sequences
+                # Compute oracle MSE for current sequences (LentIMPRA-specific)
                 oracle_mse = None
                 if oracle_model is not None:
                     try:
@@ -363,7 +356,7 @@ class LentIMPRAEvaluator(BaseEvaluator):
                 x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
 
             # Final denoising step
-            x = corrector.update_fn(sampling_score_fn, x, labels, timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device))
+            x = denoiser.update_fn(sampling_score_fn, x, labels, timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device))
             
             return x
         
