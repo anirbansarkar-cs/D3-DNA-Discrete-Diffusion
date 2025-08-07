@@ -120,6 +120,10 @@ class DeepSTARREvaluator(BaseEvaluator):
             with h5py.File(data_path, 'r') as data_file:
                 X = torch.tensor(np.array(data_file['X_test']))
             
+            # Convert one-hot to indices for consistency with generated sequences
+            # X shape: (n_samples, 4, seq_length) -> (n_samples, seq_length)
+            X = torch.argmax(X, dim=1)
+            
             # If we limited the dataset, apply the same indices to original data
             if self._dataset_indices is not None:
                 print(f"  ↳ Applying same subset indices to original data ({len(self._dataset_indices)} samples)")
