@@ -45,6 +45,7 @@ class PromoterEvaluator(BaseEvaluator):
     
     def __init__(self):
         super().__init__("Promoter")
+        self._dataset_indices = None  # Store indices for matching original data
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
         """Load Promoter model using dataset-specific model loading."""
@@ -58,18 +59,33 @@ class PromoterEvaluator(BaseEvaluator):
             return config.model.length
         return 1024  # Promoter default sequence length
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
-        """Create Promoter dataloader."""
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
+        """Create Promoter dataloader with optional sample limiting."""
         # Load datasets 
-        train_ds, val_ds = get_promoter_datasets()
+        train_ds, val_ds, test_ds = get_promoter_datasets(config.paths.data_file)
         
         # Select appropriate dataset
         if split == 'train':
             dataset = train_ds
-        elif split in ['val', 'test']:  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
+        elif split == 'test':
+            dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
+        
+        # Limit dataset size if max_samples is specified
+        if max_samples is not None and len(dataset) > max_samples:
+            # Create random subset
+            import torch.utils.data as data_utils
+            indices = torch.randperm(len(dataset))[:max_samples]
+            dataset = data_utils.Subset(dataset, indices)
+            # Store the indices for matching original data later
+            self._dataset_indices = indices
+            print(f"  ↳ Promoter dataset limited to {len(dataset)} samples from {split} split")
+        else:
+            # Full dataset - no indices needed
+            self._dataset_indices = None
             
         # Use config batch size if not specified
         if batch_size is None:
@@ -105,6 +121,35 @@ class PromoterEvaluator(BaseEvaluator):
         except Exception as e:
             print(f"Failed to load Promoter oracle model: {e}")
             return None
+    
+    def get_original_test_data(self, data_path: str) -> torch.Tensor:
+        """Get original test data for SP-MSE comparison, matching the limited dataset if applicable."""
+        try:
+            # Load Promoter test data  
+            print(f"Loading original test data from: {data_path}")
+            train_ds, val_ds, test_ds = get_promoter_datasets(data_path)
+            
+            # Use test dataset for comparison
+            # Create a dataloader to get all test data
+            full_dataloader = DataLoader(test_ds, batch_size=len(test_ds), shuffle=False)
+            batch = next(iter(full_dataloader))
+            
+            if len(batch) == 2:
+                sequences, _ = batch
+            else:
+                sequences = batch
+            
+            # If we limited the dataset, apply the same indices to original data
+            if self._dataset_indices is not None:
+                print(f"  ↳ Applying same subset indices to original data ({len(self._dataset_indices)} samples)")
+                sequences = sequences[self._dataset_indices]
+                
+            return sequences
+                
+        except Exception as e:
+            print(f"Error loading original test data: {e}")
+            # Return dummy data as fallback
+            return torch.zeros(100, 1024, 4)  # Promoter one-hot encoded sequences
     
     def compute_sp_mse(self, sampled_sequences: torch.Tensor, oracle_model, 
                        original_data: torch.Tensor) -> float:
@@ -143,57 +188,167 @@ class PromoterEvaluator(BaseEvaluator):
         Get SEI profile following the proper inference pattern.
         
         Args:
-            seq_one_hot: One-hot encoded sequences (batch_size, seq_length, 4)
+            seq_one_hot: One-hot encoded sequences (batch_size, seq_length, 4) or token indices (batch_size, seq_length)
             oracle_model: SEI oracle model
             
         Returns:
             H3K4me3 predictions (batch_size,)
         """
+        # Convert to one-hot if needed
+        if seq_one_hot.dim() == 2:  # Token indices (batch_size, seq_length)
+            import torch.nn.functional as F
+            seq_one_hot = F.one_hot(seq_one_hot.long(), num_classes=4).float()
+        
         B, L, K = seq_one_hot.shape
         seq_one_hot = seq_one_hot.cpu()
         
-        # Pad sequence to 4096 length as expected by SEI
-        # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
-        sei_inp = torch.cat([
-            torch.ones((B, 4, 1536)) * 0.25,
-            seq_one_hot.transpose(1, 2),  # Convert to (batch, channels, length)
-            torch.ones((B, 4, 1536)) * 0.25
-        ], 2).to(self.device)  # batchsize x 4 x 4,096
+        # Process in batches to avoid OOM
+        batch_size = 256  # Adjust based on available memory
+        all_predictions = []
         
-        # Get SEI predictions
-        with torch.no_grad():
-            sei_out = oracle_model(sei_inp).cpu().detach().numpy()  # batchsize x 21,907
+        from tqdm import tqdm
+        for i in tqdm(range(0, B, batch_size), desc="Processing SEI batches"):
+            end_idx = min(i + batch_size, B)
+            batch_seq = seq_one_hot[i:end_idx]
+            batch_B = batch_seq.shape[0]
+            
+            # Pad sequence to 4096 length as expected by SEI
+            # Add 1536 bases on each side with uniform background (0.25 for each nucleotide)
+            sei_inp = torch.cat([
+                torch.ones((batch_B, 4, 1536)) * 0.25,
+                batch_seq.transpose(1, 2),  # Convert to (batch, channels, length)
+                torch.ones((batch_B, 4, 1536)) * 0.25
+            ], 2).to(self.device)  # batch_B x 4 x 4,096
+            
+            # Get SEI predictions for this batch
+            with torch.no_grad():
+                sei_out = oracle_model(sei_inp).cpu().detach().numpy()  # batch_B x 21,907
+            
+            # Filter for H3K4me3 features if SEI features are available
+            if self.sei_features is not None:
+                h3k4me3_mask = self.sei_features[1].str.strip().values == 'H3K4me3'
+                sei_out = sei_out[:, h3k4me3_mask]  # batch_B x 2,350 (H3K4me3 features)
+            
+            # Take mean across H3K4me3 features for this batch
+            batch_pred = sei_out.mean(axis=1)  # batch_B
+            all_predictions.append(batch_pred)
         
-        # Filter for H3K4me3 features if SEI features are available
-        if self.sei_features is not None:
-            h3k4me3_mask = self.sei_features[1].str.strip().values == 'H3K4me3'
-            sei_out = sei_out[:, h3k4me3_mask]  # batchsize x 2,350 (H3K4me3 features)
-        
-        # Take mean across H3K4me3 features
-        predh3k4me3 = sei_out.mean(axis=1)  # batchsize
+        # Concatenate all batch predictions
+        import numpy as np
+        predh3k4me3 = np.concatenate(all_predictions, axis=0)  # B
         
         return predh3k4me3
     
-    def get_original_test_data(self, data_path: str) -> torch.Tensor:
-        """Get original test data for SP-MSE comparison."""
+    def evaluate_with_sampling(self, checkpoint_path: str, config: OmegaConf, 
+                              oracle_checkpoint: str, data_path: str,
+                              split: str = 'test', steps: Optional[int] = None, 
+                              batch_size: Optional[int] = None, architecture: str = 'transformer',
+                              show_progress: bool = False, save_sequences: bool = False,
+                              save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None):
+        """
+        Override base method to handle Promoter-specific visualization and evaluation.
+        """
+        print(f"Evaluating {self.dataset_name} on {split} split with sampling...")
+        
+        # Set default steps to sequence length if not provided
+        if steps is None:
+            steps = self.get_sequence_length(config)
+            print(f"Using default steps: {steps} (sequence length)")
+        
+        # Create dataloader with optional sample limiting
+        dataloader = self.create_dataloader(config, split, batch_size, max_samples)
+        
+        # Load oracle model
+        print("Loading oracle model for SP-MSE evaluation...")
+        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
+        
+        if oracle_model is None:
+            return {
+                'error': 'oracle_model_not_loaded',
+                'sampling_steps': steps
+            }
+        
+        # Create visualization logger if requested
+        viz_logger = None
+        if save_visualization_data:
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            actual_samples = len(dataloader.dataset)
+            viz_logger = create_visualization_logger(
+                num_samples=actual_samples,
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                split=split,
+                save_oracle_mse=True,  # Enable oracle MSE for evaluation
+                device=self.device
+            )
+            print(f"  ↳ Visualization data logging enabled with oracle MSE ({actual_samples} samples)")
+        
+        # Sample sequences using PC sampler
+        print(f"Sampling sequences with PC sampler ({steps} steps)...")
+        sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
+            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model
+        )
+        
+        # Save sequences as NPZ if requested
+        if save_sequences:
+            # Create output path based on checkpoint directory
+            checkpoint_dir = os.path.dirname(checkpoint_path)
+            npz_path = os.path.join(checkpoint_dir, "sample.npz")
+            self.save_sequences_as_npz(sampled_sequences, npz_path)
+        
+        # Get original test data for comparison
+        original_data = self.get_original_test_data(data_path)
+        
+        # Compute SP-MSE
+        print("Computing SP-MSE...")
+        sp_mse = self.compute_sp_mse(sampled_sequences, oracle_model, original_data)
+        
+        results = {
+            'dataset': self.dataset_name,
+            'split': split,
+            'num_samples': sampled_sequences.shape[0],
+            'sequence_length': sampled_sequences.shape[1],
+            'sampling_steps': steps,
+            'sp_mse': sp_mse,
+            'oracle_evaluation': 'completed'
+        }
+        
+        # Save visualization data if requested
+        if save_visualization_data and viz_logger is not None:
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"promoter_evaluation_visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
+        
+        print(f"SP-MSE: {sp_mse:.6f}")
+        
+        return results
+    
+    def get_oracle_predictions_for_viz(self, sequences: torch.Tensor, oracle_model) -> torch.Tensor:
+        """
+        Promoter-specific oracle predictions for visualization using SEI model.
+        
+        Args:
+            sequences: One-hot encoded sequences (batch_size, seq_length, 4)
+            oracle_model: SEI oracle model
+            
+        Returns:
+            Oracle H3K4me3 predictions tensor
+        """
+        # Use the same SEI profile method as in compute_sp_mse
         try:
-            # Load Promoter test data
-            train_ds, val_ds = get_promoter_datasets()
-            
-            # Create a small batch for comparison
-            dataloader = DataLoader(val_ds, batch_size=100, shuffle=False)
-            batch = next(iter(dataloader))
-            
-            if len(batch) == 2:
-                sequences, _ = batch
-                return sequences
-            else:
-                return batch
-                
+            predictions = self._get_sei_profile(sequences, oracle_model)
+            return torch.tensor(predictions, device=self.device)
         except Exception as e:
-            print(f"Error loading original test data: {e}")
-            # Return dummy data as fallback
-            return torch.zeros(100, 1024, 4)  # One-hot encoded sequences
+            print(f"Warning: Could not get oracle predictions for visualization: {e}")
+            return torch.zeros(sequences.shape[0], device=self.device)
 
 
 def load_config(architecture: str):
@@ -208,8 +363,6 @@ def main():
     """Main evaluation function using base framework."""
     # Parse arguments using base framework
     parser = parse_base_args()
-    parser.add_argument('--model_path', required=True, help='Path to model directory (required for evaluation)')
-    parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     args = parser.parse_args()
     
     # Validate required arguments for evaluation
@@ -248,8 +401,12 @@ def main():
         steps=args.steps,
         batch_size=args.batch_size,
         architecture=args.architecture,
-        show_progress=args.show_progress,
-        save_sequences=getattr(args, 'save_sequences', False)
+        show_progress=getattr(args, 'show_progress', False),
+        save_sequences=args.save_sequences,
+        save_visualization_data=getattr(args, 'save_viz_data', False),
+        viz_output_path=getattr(args, 'viz_output', None),
+        viz_format=getattr(args, 'viz_format', 'hdf5'),
+        max_samples=getattr(args, 'max_samples', None)
     )
     
     # Print and save results

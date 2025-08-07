@@ -346,7 +346,7 @@ class PL_DeepSTARR(pl.LightningModule):
         """Forward pass through the model."""
         return self.model(x)
 
-    def predict_custom(self, X, keepgrad=False):
+    def predict_custom(self, X, keepgrad=False, show_progress=False):
         """Custom prediction function with batch processing."""
         self.model.eval()
         dataloader = torch.utils.data.DataLoader(
@@ -359,7 +359,7 @@ class PL_DeepSTARR(pl.LightningModule):
         else:
             preds = preds.cpu()
         
-        for x in tqdm.tqdm(dataloader, total=len(dataloader)):
+        for x in tqdm.tqdm(dataloader, total=len(dataloader), disable=not show_progress):
             pred = self.model(x)
             if not keepgrad:
                 pred = pred.detach().cpu()
@@ -819,7 +819,7 @@ if __name__ == '__main__':
     chosen_model = 'DeepSTARR'
     chosen_dataset = 'DeepSTARR_data'
     data_path = f'./{chosen_dataset}.h5'
-    checkpoint_path = '../../../../../shared/d3_oracle/oracle_DeepSTARR_DeepSTARR_data.ckpt' # 'oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
+    checkpoint_path = 'oracle_models/oracle_DeepSTARR_DeepSTARR_data.ckpt'
     
     print("DeepSTARR Oracle Model Inference")
     print("=" * 40)

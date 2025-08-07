@@ -7,17 +7,13 @@ inheriting from the base training classes and implementing MPRA-specific
 model creation and data loading.
 """
 
-import os
 import sys
 from pathlib import Path
-import datetime
-
 
 # Package imports
-
 from scripts.train import BaseD3LightningModule, BaseD3DataModule, BaseTrainer, parse_base_args
 from model_zoo.mpra.models import create_model
-from model_zoo.mpra.data import get_mpra_datasets, get_mpra_dataloaders
+from model_zoo.mpra.data import get_mpra_datasets
 from model_zoo.mpra.sp_mse_callback import create_mpra_sp_mse_callback
 from omegaconf import OmegaConf
 
@@ -51,8 +47,10 @@ class MPRADataModule(BaseD3DataModule):
         
     def setup(self, stage: str = None):
         """Setup MPRA datasets."""
-        # Use MPRA-specific data loading
-        self.train_ds, self.val_ds = get_mpra_datasets()
+        _ = stage  # Unused parameter, required by Lightning interface
+        # Use MPRA-specific data loading with config data path
+        data_path = getattr(self.cfg.paths, 'data_file', None)
+        self.train_ds, self.val_ds, _ = get_mpra_datasets(data_path)
         print(f"MPRA dataset loaded: {len(self.train_ds)} train, {len(self.val_ds)} val samples")
 
 

@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 # Import base framework and MPRA-specific components
 from scripts.evaluate import BaseEvaluator, parse_base_args, main_evaluate
 from model_zoo.mpra.data import get_mpra_datasets
-from model_zoo.mpra.mpra import PL_mpra
+from model_zoo.mpra.mpra import PL_MPRA
 
 
 class MPRAEvaluator(BaseEvaluator):
@@ -31,6 +31,7 @@ class MPRAEvaluator(BaseEvaluator):
     
     def __init__(self):
         super().__init__("MPRA")
+        self._dataset_indices = None  # Store indices for matching original data
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
         """Load MPRA model using dataset-specific model loading."""
@@ -44,18 +45,34 @@ class MPRAEvaluator(BaseEvaluator):
             return config.model.length
         return 200  # MPRA default sequence length
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
-        """Create MPRA dataloader."""
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
+        """Create MPRA dataloader with optional sample limiting."""
         # Load datasets
-        train_ds, val_ds = get_mpra_datasets()
+        data_path = getattr(config.paths, 'data_file', None)
+        train_ds, val_ds, test_ds = get_mpra_datasets(data_path)
         
         # Select appropriate dataset
         if split == 'train':
             dataset = train_ds
-        elif split in ['val', 'test']:  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
+        elif split == 'test':
+            dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
+        
+        # Limit dataset size if max_samples is specified
+        if max_samples is not None and len(dataset) > max_samples:
+            # Create random subset
+            import torch.utils.data as data_utils
+            indices = torch.randperm(len(dataset))[:max_samples]
+            dataset = data_utils.Subset(dataset, indices)
+            # Store the indices for matching original data later
+            self._dataset_indices = indices
+            print(f"  ↳ MPRA dataset limited to {len(dataset)} samples from {split} split")
+        else:
+            # Full dataset - no indices needed
+            self._dataset_indices = None
             
         # Use config batch size if not specified
         if batch_size is None:
@@ -75,7 +92,7 @@ class MPRAEvaluator(BaseEvaluator):
             if not data_path:
                 data_path = 'model_zoo/mpra/mpra_data.h5'
                 
-            oracle = PL_mpra.load_from_checkpoint(
+            oracle = PL_MPRA.load_from_checkpoint(
                 oracle_checkpoint, 
                 input_h5_file=data_path
             ).eval()
@@ -89,25 +106,144 @@ class MPRAEvaluator(BaseEvaluator):
             return None
     
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
-        """Get original test data for SP-MSE comparison."""
+        """Get original test data for SP-MSE comparison, matching the limited dataset if applicable."""
         try:
-            # Load MPRA test data
-            train_ds, val_ds = get_mpra_datasets()
+            # Load MPRA test data  
+            print(f"Loading original test data from: {data_path}")
+            train_ds, val_ds, test_ds = get_mpra_datasets(data_path)
             
-            # Create a small batch for comparison
-            dataloader = DataLoader(val_ds, batch_size=100, shuffle=False)
-            batch = next(iter(dataloader))
+            # Use test dataset for comparison
+            # Create a dataloader to get all test data
+            full_dataloader = DataLoader(test_ds, batch_size=len(test_ds), shuffle=False)
+            batch = next(iter(full_dataloader))
             
             if len(batch) == 2:
                 sequences, _ = batch
-                return sequences
             else:
-                return batch
+                sequences = batch
+            
+            # If we limited the dataset, apply the same indices to original data
+            if self._dataset_indices is not None:
+                print(f"  ↳ Applying same subset indices to original data ({len(self._dataset_indices)} samples)")
+                sequences = sequences[self._dataset_indices]
+                
+            return sequences
                 
         except Exception as e:
             print(f"Error loading original test data: {e}")
             # Return dummy data as fallback
             return torch.zeros(100, 200, 4)  # One-hot encoded sequences
+    
+    def evaluate_with_sampling(self, checkpoint_path: str, config: OmegaConf, 
+                              oracle_checkpoint: str, data_path: str,
+                              split: str = 'test', steps: Optional[int] = None, 
+                              batch_size: Optional[int] = None, architecture: str = 'transformer',
+                              show_progress: bool = False, save_sequences: bool = False,
+                              save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None):
+        """
+        Override base method to handle MPRA-specific visualization and evaluation.
+        """
+        print(f"Evaluating {self.dataset_name} on {split} split with sampling...")
+        
+        # Set default steps to sequence length if not provided
+        if steps is None:
+            steps = self.get_sequence_length(config)
+            print(f"Using default steps: {steps} (sequence length)")
+        
+        # Create dataloader with optional sample limiting
+        dataloader = self.create_dataloader(config, split, batch_size, max_samples)
+        
+        # Load oracle model
+        print("Loading oracle model for SP-MSE evaluation...")
+        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
+        
+        if oracle_model is None:
+            return {
+                'error': 'oracle_model_not_loaded',
+                'sampling_steps': steps
+            }
+        
+        # Create visualization logger if requested
+        viz_logger = None
+        if save_visualization_data:
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            actual_samples = len(dataloader.dataset)
+            viz_logger = create_visualization_logger(
+                num_samples=actual_samples,
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                split=split,
+                save_oracle_mse=True,  # Enable oracle MSE for evaluation
+                device=self.device
+            )
+            print(f"  ↳ Visualization data logging enabled with oracle MSE ({actual_samples} samples)")
+        
+        # Sample sequences using PC sampler
+        print(f"Sampling sequences with PC sampler ({steps} steps)...")
+        sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
+            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model
+        )
+        
+        # Save sequences as NPZ if requested
+        if save_sequences:
+            # Create output path based on checkpoint directory
+            checkpoint_dir = os.path.dirname(checkpoint_path)
+            npz_path = os.path.join(checkpoint_dir, "sample.npz")
+            self.save_sequences_as_npz(sampled_sequences, npz_path)
+        
+        # Get original test data for comparison
+        original_data = self.get_original_test_data(data_path)
+        
+        # Compute SP-MSE
+        print("Computing SP-MSE...")
+        sp_mse = self.compute_sp_mse(sampled_sequences, oracle_model, original_data)
+        
+        results = {
+            'dataset': self.dataset_name,
+            'split': split,
+            'num_samples': sampled_sequences.shape[0],
+            'sequence_length': sampled_sequences.shape[1],
+            'sampling_steps': steps,
+            'sp_mse': sp_mse,
+            'oracle_evaluation': 'completed'
+        }
+        
+        # Save visualization data if requested
+        if save_visualization_data and viz_logger is not None:
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"mpra_evaluation_visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
+        
+        print(f"SP-MSE: {sp_mse:.6f}")
+        
+        return results
+    
+    def get_oracle_predictions_for_viz(self, sequences: torch.Tensor, oracle_model) -> torch.Tensor:
+        """
+        MPRA-specific oracle predictions for visualization.
+        
+        Args:
+            sequences: One-hot encoded sequences (batch_size, seq_length, 4)
+            oracle_model: MPRA oracle model
+            
+        Returns:
+            Oracle predictions tensor (batch_size, 1) for expression values
+        """
+        if hasattr(oracle_model, 'predict_custom'):
+            # Convert from (batch, length, channels) to (batch, channels, length)
+            sequences_input = sequences.permute(0, 2, 1).to(self.device)
+            return oracle_model.predict_custom(sequences_input)
+        else:
+            # Fallback
+            return torch.zeros(sequences.shape[0], 1, device=self.device)
 
 
 def load_config(architecture: str):
@@ -122,8 +258,6 @@ def main():
     """Main evaluation function using base framework."""
     # Parse arguments using base framework
     parser = parse_base_args()
-    parser.add_argument('--model_path', required=True, help='Path to model directory (required for evaluation)')
-    parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     args = parser.parse_args()
     
     # Validate required arguments for evaluation
@@ -162,8 +296,12 @@ def main():
         steps=args.steps,
         batch_size=args.batch_size,
         architecture=args.architecture,
-        show_progress=args.show_progress,
-        save_sequences=getattr(args, 'save_sequences', False)
+        show_progress=getattr(args, 'show_progress', False),
+        save_sequences=args.save_sequences,
+        save_visualization_data=getattr(args, 'save_viz_data', False),
+        viz_output_path=getattr(args, 'viz_output', None),
+        viz_format=getattr(args, 'viz_format', 'hdf5'),
+        max_samples=getattr(args, 'max_samples', None)
     )
     
     # Print and save results

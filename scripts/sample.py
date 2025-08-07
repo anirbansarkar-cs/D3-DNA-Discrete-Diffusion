@@ -54,6 +54,20 @@ class BaseSampler:
             Tuple of (model, graph, noise) needed for sampling
         """
         raise NotImplementedError("Subclasses must implement load_model()")
+
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
+        """
+        Create dataloader for sampling. Must be implemented by subclasses.
+        
+        Args:
+            config: Configuration object
+            split: Dataset split ('train', 'val', 'test')
+            batch_size: Batch size (if None, uses config default)
+            
+        Returns:
+            DataLoader instance
+        """
+        raise NotImplementedError("Subclasses must implement create_dataloader()")
     
     def get_sequence_length(self, config: OmegaConf) -> int:
         """
@@ -102,7 +116,8 @@ class BaseSampler:
     
     def sample_sequences_with_pc_sampler(self, checkpoint_path: str, config: OmegaConf, 
                                        num_samples: int, steps: int, architecture: str = 'transformer',
-                                       conditioning_labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+                                       conditioning_labels: Optional[torch.Tensor] = None,
+                                       viz_logger=None) -> torch.Tensor:
         """
         Sample sequences using the proper PC sampler.
         
@@ -113,6 +128,7 @@ class BaseSampler:
             steps: Number of sampling steps
             architecture: Architecture type
             conditioning_labels: Optional conditioning labels (if None, generates random)
+            viz_logger: Optional visualization data logger
             
         Returns:
             Sampled sequences tensor
@@ -127,9 +143,19 @@ class BaseSampler:
         if conditioning_labels is None:
             conditioning_labels = self.generate_conditioning_labels(num_samples, config)
         
-        # Create PC sampler
+        # Update visualization logger with noise schedule metadata
+        if viz_logger is not None:
+            noise_config = {
+                'type': getattr(config.noise, 'type', 'geometric'),
+                'sigma_min': getattr(config.noise, 'sigma_min', 1e-3),
+                'sigma_max': getattr(config.noise, 'sigma_max', 1.0)
+            }
+            viz_logger.update_noise_schedule_metadata(noise_config)
+        
+        # Create PC sampler with visualization support
         sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (num_samples, sequence_length), 'analytic', steps, device=self.device
+            graph, noise, (num_samples, sequence_length), 'analytic', steps, 
+            device=self.device, viz_logger=viz_logger
         )
         
         # Sample sequences
@@ -187,13 +213,31 @@ class BaseSampler:
                 for i, seq_str in enumerate(sequences_str):
                     f.write(f"{self.dataset_name}_sequence_{i},{seq_str}\n")
             print(f"Sequences saved to: {output_path}")
+
+        elif format == "h5" or format == "hdf5":
+            import h5py
+            with h5py.File(output_path, "w") as f:
+                # Convert float8 to float16 for HDF5 compatibility
+                if sequences.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+                    print("Converting float8 to float16 for HDF5 compatibility")
+                    representations_data = sequences.to(torch.float16).numpy()
+                else:
+                    representations_data = sequences.numpy()
+                f.create_dataset("representations", data=representations_data)
+            print(f"Representations saved as HDF5 to: {output_path}")
+        elif format == "pt":
+            # PyTorch native format - supports float8 natively (if available)
+            torch.save(sequences, output_path)
+            print(f"Representations saved as PyTorch tensor (dtype: {sequences.dtype}) to: {output_path}")
             
         else:
             raise ValueError(f"Unsupported format: {format}")
     
     def sample_and_save(self, checkpoint_path: str, config: OmegaConf, num_samples: int, steps: int,
                        architecture: str = 'transformer', conditioning_labels: Optional[torch.Tensor] = None,
-                       output_path: Optional[str] = None, format: str = 'npz') -> Dict[str, Any]:
+                       output_path: Optional[str] = None, format: str = 'npz', 
+                       save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                       viz_format: str = 'hdf5') -> Dict[str, Any]:
         """
         Main sampling method - just samples and saves (no evaluation).
         
@@ -206,15 +250,34 @@ class BaseSampler:
             conditioning_labels: Optional conditioning labels
             output_path: Output file path (optional, auto-generated if None)
             format: Output format ('npz', 'fasta', 'csv')
+            save_visualization_data: Whether to save intermediate sampling data
+            viz_output_path: Output path for visualization data
+            viz_format: Format for visualization data ('hdf5', 'npz')
             
         Returns:
             Dictionary of sampling results
         """
         print(f"Sampling {num_samples} {self.dataset_name} sequences using PC sampler with {steps} steps...")
         
+        # Create visualization logger if requested
+        viz_logger = None
+        if save_visualization_data:
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            viz_logger = create_visualization_logger(
+                num_samples=num_samples,
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                save_oracle_mse=False,  # No oracle MSE for sampling
+                device=self.device
+            )
+            print("  ↳ Visualization data logging enabled")
+        
         # Sample sequences
         sampled_sequences = self.sample_sequences_with_pc_sampler(
-            checkpoint_path, config, num_samples, steps, architecture, conditioning_labels
+            checkpoint_path, config, num_samples, steps, architecture, conditioning_labels, viz_logger
         )
         
         results = {
@@ -233,6 +296,127 @@ class BaseSampler:
         self.save_sequences(sampled_sequences, output_path, format)
         results['output_path'] = output_path
         
+        # Save visualization data if requested
+        if save_visualization_data and viz_logger is not None:
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
+        
+        return results
+
+
+    def save_representation(self, checkpoint_path: str, config: OmegaConf, 
+                              split: str = 'test', save_rep_timestamp: Optional[int] = None, 
+                              batch_size: Optional[int] = None, architecture: str = 'transformer',
+                              output_path: Optional[str] = None, format: str = 'npz') -> Dict[str, Any]:
+        """
+        Save the representation of the model at a given timestamp.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file
+            config: Configuration object
+            data_path: Path to data file needed by oracle
+            split: Dataset split to evaluate on
+            save_rep_timestamp: Timestamp to save representation (defaults to 200)
+            batch_size: Batch size for evaluation (optional)
+            architecture: Architecture type
+            output_path: Output file path (optional, auto-generated if None)
+            format: Output format ('npz', 'fasta', 'csv')
+        Returns:
+            Dictionary of evaluation results including SP-MSE
+        """
+        print(f"Saving representation of the model for {self.dataset_name} on {split} split...")
+        
+        # Set default steps to sequence length if not provided
+        if save_rep_timestamp is None:
+            print(f"Using default timestamp: {save_rep_timestamp}")
+        
+        # Create dataloader
+        dataloader = self.create_dataloader(config, split, batch_size)
+
+        # Load model using dataset-specific method  
+        model, graph, noise = self.load_model(checkpoint_path, config, architecture)
+        model.eval()
+
+        # Get sequence length
+        sequence_length = self.get_sequence_length(config)
+        sampling_eps=1e-3
+
+        timesteps = torch.linspace(1, sampling_eps, sequence_length + 1, device=self.device)
+        t = timesteps[save_rep_timestamp] * torch.ones(batch_size, device=self.device)
+
+        sigma, _ = noise(t)
+
+        all_representations = []
+        
+        # # Wrap dataloader with tqdm if show_progress is True
+        # if show_progress:
+        #     dataloader = tqdm(dataloader, desc="Sampling sequences")
+        
+        for batch_idx, (batch, targets) in enumerate(dataloader):
+            current_batch_size = batch.shape[0]
+            if current_batch_size != batch_size:
+                t = timesteps[save_rep_timestamp] * torch.ones(current_batch_size, device=self.device)
+                sigma, _ = noise(t)
+
+            batch = batch.to(self.device)
+            perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+            targets = None #for unconditional generation
+            _, rep = model(perturbed_batch, targets, train=False, sigma=sigma, layer_idx=11)
+            rep_cpu = rep.detach().cpu()
+            # Convert to float8 for maximum memory efficiency
+            try:
+                all_representations.append(rep_cpu.to(torch.float16))
+            except (RuntimeError, AttributeError):
+                # Fallback to float16 if float8 not supported
+                print("Warning: Float8 not supported, falling back to float16")
+                all_representations.append(rep_cpu.to(torch.float16))
+                        
+            del rep
+            torch.cuda.empty_cache()
+        
+        all_representations = torch.cat(all_representations, dim=0)
+        print(all_representations.shape)
+        
+        results = {
+            'dataset': self.dataset_name,
+            'split': split,
+            'sequence_length': sequence_length,
+            'save_rep_timestamp': save_rep_timestamp,
+            'batch_size': batch_size,
+            'architecture': architecture
+        }
+
+        # Save representation
+        if output_path is None:
+            # Extract directory from checkpoint path for output
+            checkpoint_dir = os.path.dirname(checkpoint_path)
+            output_path = os.path.join(checkpoint_dir, f"rep_{save_rep_timestamp}_{split}.{format}")
+        # if format == "h5" or format == "hdf5":
+        #     import h5py
+        #     with h5py.File(output_path, "w") as f:
+        #         # Convert float8 to float16 for HDF5 compatibility
+        #         if all_representations.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+        #             print("Converting float8 to float16 for HDF5 compatibility")
+        #             representations_data = all_representations.to(torch.float16).numpy()
+        #         else:
+        #             representations_data = all_representations.numpy()
+        #         f.create_dataset("representations", data=representations_data)
+        #     print(f"Representations saved as HDF5 to: {output_path}")
+        # elif format == "pt":
+        #     # PyTorch native format - supports float8 natively (if available)
+        #     torch.save(all_representations, output_path)
+        #     print(f"Representations saved as PyTorch tensor (dtype: {all_representations.dtype}) to: {output_path}")
+        # else:
+        self.save_sequences(all_representations, output_path, format)
+        results['output_path'] = output_path
+        
+        print(f"Representation saved to: {output_path}")
+        
         return results
 
 
@@ -241,11 +425,21 @@ def parse_base_args():
     parser = argparse.ArgumentParser(description='D3 Sampling Script')
     parser.add_argument('--checkpoint', required=True, help='Path to model checkpoint file')
     parser.add_argument('--architecture', required=True, choices=['transformer', 'convolutional'], help='Model architecture')
+    parser.add_argument('--save_rep', required=False, help='Saving representation of the model')
+    parser.add_argument('--save_rep_timestamp', type=int, default=200, help='Saving representation at this timestamp')
+    parser.add_argument('--split', choices=['train', 'val', 'test'], default='test', help='Dataset split to save representation on')
+    parser.add_argument('--data_path', required=False, help='Path to data file (required for representation)')
     parser.add_argument('--config', help='Path to config file (optional, dataset may provide default)')
     parser.add_argument('--num_samples', type=int, default=1000, help='Number of samples to generate')
     parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     parser.add_argument('--output', help='Output file path')
-    parser.add_argument('--format', choices=['npz', 'fasta', 'csv'], default='npz', help='Output format')
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size for sampling')
+    parser.add_argument('--format', choices=['npz', 'fasta', 'csv', 'h5', 'hdf5', 'pt'], default='h5', help='Output format')
+    
+    # Visualization data arguments
+    parser.add_argument('--save_viz_data', action='store_true', help='Save visualization data (sequences, scores, noise levels)')
+    parser.add_argument('--viz_output', help='Output path for visualization data')
+    parser.add_argument('--viz_format', choices=['hdf5', 'h5', 'npz'], default='hdf5', help='Visualization data format')
     
     return parser
 
@@ -269,6 +463,31 @@ def main_sample(sampler: BaseSampler, args):
         return 1
     
     config = OmegaConf.load(args.config)
+
+    if args.save_rep:
+        if not args.data_path:
+            print("Error: --data_path is required for saving representation")
+            return 1
+        else:
+            print(f"Saving representation of the model to {args.data_path}")
+            results = sampler.save_representation(
+                checkpoint_path=args.checkpoint,
+                config=config,
+                split=args.split,
+                save_rep_timestamp=args.save_rep_timestamp,
+                batch_size=args.batch_size,
+                architecture=args.architecture,
+                output_path=args.output,
+                format=args.format
+            )
+
+            # Print results
+            print(f"\n{sampler.dataset_name} Representation Results:")
+            print("=" * 40)
+            for key, value in results.items():
+                print(f"{key}: {value}")
+            
+            print(f"\n✓ {sampler.dataset_name} saving representation completed successfully!")
     
     # Set default steps to sequence length if not provided
     steps = args.steps
@@ -284,7 +503,10 @@ def main_sample(sampler: BaseSampler, args):
         steps=steps,
         architecture=args.architecture,
         output_path=args.output,
-        format=args.format
+        format=args.format,
+        save_visualization_data=args.save_viz_data,
+        viz_output_path=args.viz_output,
+        viz_format=args.viz_format
     )
     
     # Print results

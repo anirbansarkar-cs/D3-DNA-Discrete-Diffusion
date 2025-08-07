@@ -10,23 +10,18 @@ with dilated residual blocks for capturing long-range dependencies.
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
 import torch.optim as optim
 
 import os
 import h5py
 import numpy as np
-import copy
-import re
 import tqdm
 from scipy import stats
-import torch.utils.data as data_utils
 import random
-from typing import Any, Dict, Optional
-from sklearn.metrics import roc_auc_score, average_precision_score
+from typing import Dict
 from pytorch_lightning import loggers as pl_loggers
-from filelock import FileLock
+from pathlib import Path
 
 class DilatedResidual(pl.LightningModule):
     """Dilated residual block for capturing long-range dependencies.
@@ -224,7 +219,7 @@ class PL_MPRA(pl.LightningModule):
         
         # Model configuration
         self.scale = scale
-        self.model = MPRA(output_dim=1)
+        self.model = MPRA(output_dim=3)  # 3 outputs for MPRA signals
         self.name = 'mpra'
         self.metric_names = ['PCC', 'Spearman']
         self.initial_ds = initial_ds
@@ -251,7 +246,7 @@ class PL_MPRA(pl.LightningModule):
             ).permute(0, 2, 1)
             self.y_train = torch.tensor(
                 np.array(data['y_train']).astype(np.float32)
-            )[:, 2].unsqueeze(1)
+            )
             
             # Load and preprocess test data
             self.X_test = torch.tensor(
@@ -259,7 +254,7 @@ class PL_MPRA(pl.LightningModule):
             ).permute(0, 2, 1)
             self.y_test = torch.tensor(
                 np.array(data['y_test']).astype(np.float32)
-            )[:, 2].unsqueeze(1)
+            )
             
             # Load and preprocess validation data
             self.X_valid = torch.tensor(
@@ -267,7 +262,7 @@ class PL_MPRA(pl.LightningModule):
             ).permute(0, 2, 1)
             self.y_valid = torch.tensor(
                 np.array(data['y_valid']).astype(np.float32)
-            )[:, 2].unsqueeze(1)
+            )
             
             self.X_test2 = self.X_test
             self.y_test2 = self.y_test
@@ -384,11 +379,12 @@ class PL_MPRA(pl.LightningModule):
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
-            pred = self.model(x)
-            if not keepgrad:
-                pred = pred.detach().cpu()
-            preds = torch.cat((preds, pred), axis=0)
-        
+            with torch.no_grad():
+                pred = self.model(x)
+                if not keepgrad:
+                    pred = pred.detach().cpu()
+                preds = torch.cat((preds, pred), axis=0)
+                
         return preds
 
     def predict_custom_mcdropout(self, X, seed=41, keepgrad=False):
@@ -414,7 +410,7 @@ class PL_MPRA(pl.LightningModule):
             preds = preds.cpu()
         
         for x in tqdm.tqdm(dataloader, total=len(dataloader)):
-            pred = self.model(x)
+            pred = self.model(x.to(self.device))
             if not keepgrad:
                 pred = pred.detach().cpu()
             preds = torch.cat((preds, pred), axis=0)
@@ -574,36 +570,110 @@ def training_with_PL(chosen_model: str, chosen_dataset: str,
 
 
 if __name__ == '__main__':
-    """Main execution for training MPRA oracle model."""
+    """Main execution for MPRA oracle model inference."""
     
-    # Define model-dataset pairs
-    pairlist = [['mpra', 'mpra_data']]
+    # Configuration
+    chosen_model = 'mpra'
+    chosen_dataset = 'mpra_data'
+    data_path = f'./{chosen_dataset}.h5'
+    checkpoint_path = 'oracle_models/oracle_mpra_mpra_data.ckpt'
     
-    for pair in pairlist:
-        chosen_model, chosen_dataset = pair
-        
-        # Set random seeds for reproducibility
-        overall_seed = 41
-        torch.manual_seed(overall_seed)
-        random.seed(overall_seed)
-        np.random.seed(overall_seed)
+    print("MPRA Oracle Model Inference")
+    print("=" * 40)
+    print("Configuration:")
+    print(f"  Model: {chosen_model}")
+    print(f"  Dataset: {chosen_dataset}")
+    print(f"  Data path: {data_path}")
+    print(f"  Checkpoint: {checkpoint_path}")
+    
+    # Check if data file exists
+    if Path(data_path).exists():
+        print(f"\nData file found: {data_path}")
         
         # Suppress Lightning logs
         import logging
         logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
         
-        # Train model
-        metrics = training_with_PL(
-            chosen_model,
-            chosen_dataset,
-            initial_test=True,
-            mcdropout_test=False,
-            verbose=False,
-            wanted_wandb=False
-        )
-        
-        print("\n" + "="*50)
-        print("TRAINING COMPLETED")
-        print(f"Final metrics: {metrics}")
-        print("Note: Expected PCC ~0.83, Spearman ~0.77 for MPRA")
-        print("="*50)
+        # Check if checkpoint exists
+        if Path(checkpoint_path).exists():
+            print(f"Checkpoint found: {checkpoint_path}")
+            
+            # Load pre-trained model
+            try:
+                model = PL_MPRA(input_h5_file=data_path, initial_ds=True)
+                checkpoint = torch.load(checkpoint_path, map_location='cpu')
+                model.load_state_dict(checkpoint['state_dict'], strict=False)
+                model.eval()
+                print("✓ Loaded pre-trained model from checkpoint")
+                
+                # Get test data
+                print(f"\nTest data shape: {model.X_test.shape}")
+                print(f"Test labels shape: {model.y_test.shape}")
+                
+                # Make predictions
+                print("Making predictions...")
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                model = model.to(device)
+                
+                # Move test data to the same device as the model
+                X_test_device = model.X_test.to(device)
+                
+                y_score = model.predict_custom(X_test_device)
+                y_true = model.y_test
+                
+                print(f"Predictions shape: {y_score.shape}")
+                print(f"Targets shape: {y_true.shape}")
+                
+                # Calculate metrics using the model's built-in metrics function
+                metrics_dict = model.metrics(y_score.cpu(), y_true.cpu())
+                
+                # Extract correlations
+                pearson_vals = metrics_dict['PCC'] 
+                spearman_vals = metrics_dict['Spearman']
+                
+                print(f"\n" + "="*50)
+                print("INFERENCE RESULTS")
+                print("="*50)
+                print(f"Pearson correlations: {pearson_vals}")
+                print(f"Mean Pearson r: {pearson_vals.mean():.4f}")
+                print(f"Spearman correlations: {spearman_vals}")
+                print(f"Mean Spearman rho: {spearman_vals.mean():.4f}")
+                
+                # Print individual signal correlations (MPRA has 3 signals)
+                signal_names = ['K562', 'HepG2', 'SK-N-SH']
+                print(f"\nPer-cell line correlations:")
+                for i, signal in enumerate(signal_names):
+                    print(f"  {signal}:")
+                    print(f"    Pearson r: {pearson_vals[i]:.4f}")
+                    print(f"    Spearman rho: {spearman_vals[i]:.4f}")
+                print("="*50)
+                
+            except Exception as e:
+                print(f"Error loading model or making predictions: {e}")
+                print("\nTo train a model first, uncomment the training section below:")
+                print("# metrics = training_with_PL(chosen_model, chosen_dataset)")
+        else:
+            print(f"\nCheckpoint not found: {checkpoint_path}")
+            print("Training a new model...")
+            
+            # Commented out training - uncomment to train
+            # metrics = training_with_PL(
+            #     chosen_model, 
+            #     chosen_dataset, 
+            #     initial_test=True, 
+            #     mcdropout_test=False, 
+            #     verbose=True, 
+            #     wanted_wandb=False
+            # )
+            # print(f"Training completed. Final metrics: {metrics}")
+            
+            print("Training is commented out. To train:")
+            print("1. Uncomment the training_with_PL call above")
+            print("2. Run the script to generate the checkpoint")
+            print("3. Re-run for inference")
+    else:
+        print(f"\nData file not found: {data_path}")
+        print("\nTo use this script:")
+        print("1. Ensure mpra_data.h5 is in the current directory")
+        print("2. Either train a model first or provide a pre-trained checkpoint")
+        print("3. Run inference to get Pearson and Spearman correlations")

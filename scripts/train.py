@@ -461,6 +461,9 @@ class BaseTrainer:
     def create_trainer(self, **trainer_kwargs):
         """Create PyTorch Lightning trainer."""
         
+        # Check command line args for show_progress flag (simple approach)
+        show_progress = '--show_progress' in sys.argv
+        
         # Extract relevant training parameters - using epochs instead of steps
         default_trainer_args = {
             'max_epochs': self.cfg.training.get('max_epochs', 300),  # Default to 300 epochs
@@ -470,7 +473,7 @@ class BaseTrainer:
             'precision': 'bf16-mixed',  # Use mixed precision like original
             'gradient_clip_val': self.cfg.optim.grad_clip if self.cfg.optim.grad_clip >= 0 else None,
             'enable_checkpointing': True,
-            'enable_progress_bar': True,
+            'enable_progress_bar': show_progress,
             'enable_model_summary': True,
             'callbacks': self.setup_callbacks(),
             'logger': self.setup_logging(),
@@ -534,5 +537,6 @@ def parse_base_args():
     parser.add_argument('--wandb_project', help='Weights & Biases project name')
     parser.add_argument('--wandb_name', help='Weights & Biases run name')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--show_progress', action='store_true', help='Enable progress bar during training')
 
     return parser

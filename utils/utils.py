@@ -48,7 +48,7 @@ def get_score_fn(model, train=False, sampling=False):
     def score_fn(x, sigma, labels=None):
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             sigma = sigma.reshape(-1)
-            score = model_fn(x, sigma, labels)
+            score, _ = model_fn(x, sigma, labels)
             
             if sampling:
                 # when sampling return true score (not log used for training)

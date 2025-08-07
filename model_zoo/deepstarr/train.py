@@ -62,8 +62,7 @@ class DeepSTARRDataModule(BaseD3DataModule):
 class DeepSTARRTrainer(BaseTrainer):
     """Trainer specifically for DeepSTARR dataset."""
     
-    def __init__(self, architecture: str, config_path: str = None, work_dir: str = None,
-                 more_cfg_args: list = None):
+    def __init__(self, architecture: str, config_path: str = None, work_dir: str = None):
         # Load DeepSTARR config
         if config_path:
             cfg = OmegaConf.load(config_path)
@@ -115,7 +114,6 @@ def main():
         architecture=args.architecture,
         config_path=args.config,
         work_dir=args.work_dir,
-        more_cfg_args=unknown,
     )
 
     # Override WandB settings if provided

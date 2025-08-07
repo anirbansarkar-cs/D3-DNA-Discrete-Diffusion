@@ -2,7 +2,7 @@
 dataset:
   name: mpra
   sequence_length: 200
-  num_classes: 3
+  num_classes: 4
   signal_dim: 3
 
 # Hardware configuration
@@ -90,7 +90,7 @@ model:
 
 # Logging configuration (optional)
 wandb:
-  enabled: false
+  enabled: true
   project: d3-mpra
   name: mpra-convolutional
   entity: d3-cshl
@@ -100,5 +100,5 @@ wandb:
 # Paths - provide full paths
 paths:
   data_file: "model_zoo/mpra/mpra_data.h5"
-  oracle_model: "model_zoo/mpra/oracle_models/oracle_MPRA_mpra_data.ckpt"
+  oracle_model: "model_zoo/mpra/oracle_models/oracle_mpra_mpra_data.ckpt"
   checkpoints_dir: "checkpoints"
