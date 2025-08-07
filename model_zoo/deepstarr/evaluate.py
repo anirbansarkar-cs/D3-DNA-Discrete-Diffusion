@@ -120,10 +120,6 @@ class DeepSTARREvaluator(BaseEvaluator):
             with h5py.File(data_path, 'r') as data_file:
                 X = torch.tensor(np.array(data_file['X_test']))
             
-            # Convert one-hot to indices for consistency with generated sequences
-            # X shape: (n_samples, 4, seq_length) -> (n_samples, seq_length)
-            X = torch.argmax(X, dim=1)
-            
             # If we limited the dataset, apply the same indices to original data
             if self._dataset_indices is not None:
                 print(f"  ↳ Applying same subset indices to original data ({len(self._dataset_indices)} samples)")
@@ -173,6 +169,14 @@ class DeepSTARREvaluator(BaseEvaluator):
         if save_visualization_data:
             from utils.visualization_logger import create_visualization_logger
             sequence_length = self.get_sequence_length(config)
+            
+            # Convert original samples to token indices for visualization storage
+            # Keep original_data in one-hot format for SP-MSE computation
+            original_samples_indices = None
+            if original_data is not None:
+                # Convert from (batch_size, 4, seq_length) to (batch_size, seq_length)
+                original_samples_indices = torch.argmax(original_data, dim=1)
+            
             viz_logger = create_visualization_logger(
                 num_samples=len(dataloader.dataset),
                 sequence_length=sequence_length,
@@ -182,7 +186,7 @@ class DeepSTARREvaluator(BaseEvaluator):
                 split=split,
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
                 device=self.device,
-                original_samples=original_data  # Add original samples for MSE comparison
+                original_samples=original_samples_indices  # Add original samples as token indices
             )
             print("  ↳ Visualization data logging enabled with oracle MSE and original samples")
         
