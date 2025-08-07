@@ -164,12 +164,23 @@ class MPRAEvaluator(BaseEvaluator):
                 'sampling_steps': steps
             }
         
+        # Get original test data for comparison and visualization
+        original_data = self.get_original_test_data(data_path)
+        
         # Create visualization logger if requested
         viz_logger = None
         if save_visualization_data:
             from utils.visualization_logger import create_visualization_logger
             sequence_length = self.get_sequence_length(config)
             actual_samples = len(dataloader.dataset)
+            
+            # Convert original samples to token indices for visualization storage
+            # Keep original_data in one-hot format for SP-MSE computation
+            original_samples_indices = None
+            if original_data is not None:
+                # Convert from (batch_size, 4, seq_length) to (batch_size, seq_length)
+                original_samples_indices = torch.argmax(original_data, dim=1)
+            
             viz_logger = create_visualization_logger(
                 num_samples=actual_samples,
                 sequence_length=sequence_length,
@@ -178,9 +189,10 @@ class MPRAEvaluator(BaseEvaluator):
                 architecture=architecture,
                 split=split,
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
-                device=self.device
+                device=self.device,
+                original_samples=original_samples_indices  # Add original samples as token indices
             )
-            print(f"  ↳ Visualization data logging enabled with oracle MSE ({actual_samples} samples)")
+            print(f"  ↳ Visualization data logging enabled with oracle MSE and original samples ({actual_samples} samples)")
         
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
@@ -194,9 +206,6 @@ class MPRAEvaluator(BaseEvaluator):
             checkpoint_dir = os.path.dirname(checkpoint_path)
             npz_path = os.path.join(checkpoint_dir, "sample.npz")
             self.save_sequences_as_npz(sampled_sequences, npz_path)
-        
-        # Get original test data for comparison
-        original_data = self.get_original_test_data(data_path)
         
         # Compute SP-MSE
         print("Computing SP-MSE...")

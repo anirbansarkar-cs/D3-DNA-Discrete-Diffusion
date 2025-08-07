@@ -13,7 +13,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
-from typing import Optional
+from typing import Optional, Tuple
+from tqdm import tqdm
 import h5py
 import numpy as np
 
@@ -213,12 +214,23 @@ class LentIMPRAEvaluator(BaseEvaluator):
                 'sampling_steps': steps
             }
         
+        # Get original test data for comparison and visualization
+        original_data = self.get_original_test_data(data_path)
+        
         # Create visualization logger if requested
         viz_logger = None
         if save_visualization_data:
             from utils.visualization_logger import create_visualization_logger
             sequence_length = self.get_sequence_length(config)
             actual_samples = len(dataloader.dataset)
+            
+            # Convert original samples to token indices for visualization storage
+            # Keep original_data in one-hot format for SP-MSE computation
+            original_samples_indices = None
+            if original_data is not None:
+                # Convert from (batch_size, seq_length, 4) to (batch_size, seq_length)
+                original_samples_indices = torch.argmax(original_data, dim=2)
+            
             viz_logger = create_visualization_logger(
                 num_samples=actual_samples,
                 sequence_length=sequence_length,
@@ -227,9 +239,10 @@ class LentIMPRAEvaluator(BaseEvaluator):
                 architecture=architecture,
                 split=split,
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
-                device=self.device
+                device=self.device,
+                original_samples=original_samples_indices  # Add original samples as token indices
             )
-            print(f"  ↳ Visualization data logging enabled with oracle MSE ({actual_samples} samples)")
+            print(f"  ↳ Visualization data logging enabled with oracle MSE and original samples ({actual_samples} samples)")
         
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
@@ -243,9 +256,6 @@ class LentIMPRAEvaluator(BaseEvaluator):
             checkpoint_dir = os.path.dirname(checkpoint_path)
             npz_path = os.path.join(checkpoint_dir, "sample.npz")
             self.save_sequences_as_npz(sampled_sequences, npz_path)
-        
-        # Get original test data for comparison
-        original_data = self.get_original_test_data(data_path)
         
         # Compute SP-MSE
         print("Computing SP-MSE...")
@@ -293,6 +303,71 @@ class LentIMPRAEvaluator(BaseEvaluator):
         except Exception as e:
             print(f"Warning: Could not get oracle predictions for visualization: {e}")
             return torch.zeros(sequences.shape[0], device=self.device)
+    
+    def create_evaluation_sampler_with_viz(self, model, config, oracle_model=None):
+        """Create PC sampler function with visualization support and oracle MSE computation."""
+        import torch.nn.functional as F
+        from scripts import sampling
+        
+        def evaluation_pc_sampler_with_viz(shape, labels, steps, viz_logger=None, show_progress=False):
+            # Set up SDE and sampling components
+            sde, _, _ = sampling.get_pc_sampler(model, config, None, shape[0], self.device) 
+            sampling_score_fn = sampling.get_sampling_fn(sde, model, config, self.device)
+            
+            # Create predictor and corrector
+            predictor = sampling.ReverseDiffusionPredictor(sde, sampling_score_fn, probability_flow=False)
+            corrector = sampling.LangevinCorrector(sde, sampling_score_fn, snr=config.sampling.snr, n_steps=config.sampling.corrector_steps)
+            
+            # Initialize
+            x = sde.prior_sampling(shape[0]).to(self.device)
+            labels = labels.to(self.device)
+            
+            # Set up timesteps 
+            eps = sampling.eps
+            timesteps = torch.linspace(sde.T, eps, steps, device=self.device)
+            dt = (1 - eps) / steps
+            noise = sde.noise_schedule
+            
+            for i in range(steps):
+                t = timesteps[i] * torch.ones(x.shape[0], 1, device=self.device)
+                
+                # Get current noise level and score matrix
+                sigma, dsigma = noise(t.squeeze())
+                score_matrix = sampling_score_fn(x, sigma, labels)
+                
+                # Compute oracle MSE for current sequences
+                oracle_mse = None
+                if oracle_model is not None:
+                    try:
+                        # Convert sequences to one-hot for oracle prediction
+                        x_one_hot = F.one_hot(x, num_classes=4).float()
+                        oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
+                        
+                        # Compute MSE per sample (similar to DeepSTARR approach)
+                        oracle_mse = oracle_predictions.pow(2).mean(dim=-1)  # MSE per sample
+                    except Exception as e:
+                        print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
+                        oracle_mse = None
+                
+                # Log the step data
+                viz_logger.log_step(
+                    step=i,
+                    timestep=timesteps[i].item(),
+                    sequences=x,
+                    score_matrix=score_matrix,
+                    noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
+                    noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
+                    oracle_mse=oracle_mse
+                )
+                
+                x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
+
+            # Final denoising step
+            x = corrector.update_fn(sampling_score_fn, x, labels, timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device))
+            
+            return x
+        
+        return evaluation_pc_sampler_with_viz
 
 
 def load_default_config():
