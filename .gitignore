@@ -44,3 +44,4 @@ target.sei.names
 *.tar
 
 mpra_old/
+viz/

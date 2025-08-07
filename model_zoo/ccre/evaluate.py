@@ -35,6 +35,7 @@ class cCREEvaluator(BaseEvaluator):
     
     def __init__(self):
         super().__init__("cCRE")
+        self._dataset_indices = None  # Store indices for matching original data
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
         """Load cCRE model using dataset-specific model loading."""
@@ -42,8 +43,8 @@ class cCREEvaluator(BaseEvaluator):
         
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
-        """Create cCRE dataloader."""
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
+        """Create cCRE dataloader with optional sample limiting."""
         # Get split configuration from config
         train_ratio = getattr(config.data, 'train_ratio', 0.95)
         valid_ratio = getattr(config.data, 'valid_ratio', 0.05)
@@ -64,6 +65,19 @@ class cCREEvaluator(BaseEvaluator):
             dataset = val_ds
         else:
             raise ValueError(f"Unknown split: {split}")
+        
+        # Limit dataset size if max_samples is specified
+        if max_samples is not None and len(dataset) > max_samples:
+            # Create random subset
+            import torch.utils.data as data_utils
+            indices = torch.randperm(len(dataset))[:max_samples]
+            dataset = data_utils.Subset(dataset, indices)
+            # Store the indices for matching original data later
+            self._dataset_indices = indices
+            print(f"  ↳ cCRE dataset limited to {len(dataset)} samples from {split} split")
+        else:
+            # Full dataset - no indices needed
+            self._dataset_indices = None
             
         # Use config batch size if not specified
         if batch_size is None:
@@ -78,11 +92,18 @@ class cCREEvaluator(BaseEvaluator):
         )
     
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
-        """Get original test data for evaluation."""
+        """Get original test data for evaluation, matching the limited dataset if applicable."""
         try:
             # Load cCRE data from the 'seqs' key
+            print(f"Loading original test data from: {data_path}")
             with h5py.File(data_path, 'r') as data_file:
                 X = torch.tensor(np.array(data_file['seqs']))
+            
+            # If we limited the dataset, apply the same indices to original data
+            if self._dataset_indices is not None:
+                print(f"  ↳ Applying same subset indices to original data ({len(self._dataset_indices)} samples)")
+                X = X[self._dataset_indices]
+                
             return X
         except Exception as e:
             print(f"Error loading original test data: {e}")
@@ -261,9 +282,11 @@ class cCREEvaluator(BaseEvaluator):
                               oracle_checkpoint: str = None, data_path: str = None,
                               split: str = 'test', steps: Optional[int] = None, 
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
-                              show_progress: bool = False) -> Dict[str, Any]:
+                              show_progress: bool = False, save_sequences: bool = False,
+                              save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None) -> Dict[str, Any]:
         """
-        Override base evaluation to provide variant effect prediction instead of SP-MSE.
+        Override base evaluation to provide variant effect prediction with optional visualization.
         
         Since cCRE has no oracle model, we skip oracle-based evaluation and focus on
         the model's ability to distinguish between sequences.
@@ -273,6 +296,43 @@ class cCREEvaluator(BaseEvaluator):
         
         # Load model for basic validation
         model, graph, noise = self.load_model(checkpoint_path, config, architecture)
+        
+        # Set default steps to sequence length if not provided
+        if steps is None:
+            steps = self.get_sequence_length(config)
+            print(f"Using default steps: {steps} (sequence length)")
+        
+        # Create dataloader with optional sample limiting (for visualization)
+        if save_visualization_data:
+            dataloader = self.create_dataloader(config, split, batch_size, max_samples)
+            
+            # Create visualization logger
+            from utils.visualization_logger import create_visualization_logger
+            sequence_length = self.get_sequence_length(config)
+            actual_samples = len(dataloader.dataset)
+            viz_logger = create_visualization_logger(
+                num_samples=actual_samples,
+                sequence_length=sequence_length,
+                num_steps=steps,
+                dataset_name=self.dataset_name,
+                architecture=architecture,
+                split=split,
+                save_oracle_mse=False,  # No oracle for cCRE
+                device=self.device
+            )
+            print(f"  ↳ Visualization data logging enabled ({actual_samples} samples)")
+            
+            # Sample sequences using PC sampler for visualization
+            print(f"Sampling sequences with PC sampler ({steps} steps) for visualization...")
+            sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
+                checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, None
+            )
+            
+            # Save sequences as NPZ if requested
+            if save_sequences:
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                npz_path = os.path.join(checkpoint_dir, "sample.npz")
+                self.save_sequences_as_npz(sampled_sequences, npz_path)
         
         # Create a simple test: generate some random variants and compute scores
         test_variants = [
@@ -289,11 +349,35 @@ class cCREEvaluator(BaseEvaluator):
         results.update({
             'evaluation_type': 'variant_effect_prediction',
             'split': split,
-            'sampling_steps': steps or self.get_sequence_length(config),
+            'sampling_steps': steps,
             'note': 'Test evaluation with dummy variants - replace with real TraitGym data'
         })
         
+        # Save visualization data if requested
+        if save_visualization_data and 'viz_logger' in locals():
+            if viz_output_path is None:
+                # Auto-generate visualization output path
+                checkpoint_dir = os.path.dirname(checkpoint_path)
+                viz_output_path = os.path.join(checkpoint_dir, f"ccre_evaluation_visualization_data.{viz_format}")
+            
+            viz_logger.save(viz_output_path, viz_format)
+            results['visualization_output_path'] = viz_output_path
+        
         return results
+    
+    def get_oracle_predictions_for_viz(self, sequences: torch.Tensor, oracle_model) -> torch.Tensor:
+        """
+        cCRE-specific oracle predictions for visualization (no oracle available).
+        
+        Args:
+            sequences: One-hot encoded sequences (batch_size, seq_length, 4)
+            oracle_model: Not used for cCRE
+            
+        Returns:
+            Zero tensor (no oracle predictions available)
+        """
+        # cCRE has no oracle model, return zeros
+        return torch.zeros(sequences.shape[0], device=self.device)
 
 
 def load_default_config():
@@ -355,7 +439,12 @@ def main():
             steps=args.steps,
             batch_size=args.batch_size,
             architecture=args.architecture,
-            show_progress=args.show_progress
+            show_progress=getattr(args, 'show_progress', False),
+            save_sequences=getattr(args, 'save_sequences', False),
+            save_visualization_data=getattr(args, 'save_viz_data', False),
+            viz_output_path=getattr(args, 'viz_output', None),
+            viz_format=getattr(args, 'viz_format', 'hdf5'),
+            max_samples=getattr(args, 'max_samples', None)
         )
     
     # Print and save results
