@@ -33,7 +33,8 @@ class VisualizationDataLogger:
                  architecture: str = "transformer",
                  split: Optional[str] = None,
                  save_oracle_mse: bool = False,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 original_samples: Optional[torch.Tensor] = None):
         """
         Initialize the visualization data logger.
         
@@ -46,6 +47,7 @@ class VisualizationDataLogger:
             split: Dataset split (for evaluation)
             save_oracle_mse: Whether to save oracle MSE predictions
             device: Device to store tensors on
+            original_samples: Original samples for MSE comparison (evaluation only)
         """
         self.num_samples = num_samples
         self.sequence_length = sequence_length
@@ -55,6 +57,7 @@ class VisualizationDataLogger:
         self.split = split
         self.save_oracle_mse = save_oracle_mse
         self.device = device or torch.device('cpu')
+        self.original_samples = original_samples.detach().cpu() if original_samples is not None else None
         
         # Initialize storage for step data
         self.step_data = []
@@ -67,6 +70,11 @@ class VisualizationDataLogger:
             'split': split,
             'save_oracle_mse': save_oracle_mse
         }
+        
+        # Add original samples to metadata if provided
+        if self.original_samples is not None:
+            self.metadata['has_original_samples'] = True
+            self.metadata['original_samples'] = self.original_samples
         
         print(f"✓ Visualization logger initialized for {num_samples} samples, {num_steps} steps")
         if save_oracle_mse:
@@ -146,6 +154,9 @@ class VisualizationDataLogger:
                     for subkey, subvalue in value.items():
                         if subvalue is not None:
                             subgroup.attrs[subkey] = subvalue
+                elif key == 'original_samples' and value is not None:
+                    # Save original samples as dataset in metadata
+                    metadata_group.create_dataset('original_samples', data=value.numpy())
                 elif value is not None:
                     metadata_group.attrs[key] = value
             
@@ -197,6 +208,9 @@ class VisualizationDataLogger:
                 # Flatten nested dictionaries
                 for subkey, subvalue in value.items():
                     save_dict[f'{key}_{subkey}'] = subvalue
+            elif key == 'original_samples' and value is not None:
+                # Save original samples directly (not as meta_ prefix)
+                save_dict['original_samples'] = value.numpy()
             else:
                 save_dict[f'meta_{key}'] = value
         
@@ -224,6 +238,8 @@ class VisualizationDataLogger:
             if self.save_oracle_mse and 'oracle_mse' in self.step_data[0]:
                 oracle_mses = torch.stack([entry['oracle_mse'] for entry in self.step_data], dim=0)
                 save_dict['oracle_mses'] = oracle_mses.numpy()  # Shape: (num_steps, batch_size)
+            
+            # Original samples already added in metadata section above
         
         np.savez_compressed(filepath, **save_dict)
         
@@ -259,7 +275,8 @@ def create_visualization_logger(num_samples: int,
                                architecture: str = "transformer", 
                                split: Optional[str] = None,
                                save_oracle_mse: bool = False,
-                               device: torch.device = None) -> VisualizationDataLogger:
+                               device: torch.device = None,
+                               original_samples: Optional[torch.Tensor] = None) -> VisualizationDataLogger:
     """
     Factory function to create a visualization data logger.
     
@@ -272,6 +289,7 @@ def create_visualization_logger(num_samples: int,
         split: Dataset split (for evaluation)
         save_oracle_mse: Whether to save oracle MSE predictions
         device: Device to store tensors on
+        original_samples: Original samples for MSE comparison (evaluation only)
     
     Returns:
         VisualizationDataLogger instance
@@ -284,5 +302,6 @@ def create_visualization_logger(num_samples: int,
         architecture=architecture,
         split=split,
         save_oracle_mse=save_oracle_mse,
-        device=device
+        device=device,
+        original_samples=original_samples
     )

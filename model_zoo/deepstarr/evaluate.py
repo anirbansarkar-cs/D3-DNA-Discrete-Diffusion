@@ -161,6 +161,9 @@ class DeepSTARREvaluator(BaseEvaluator):
                 'sampling_steps': steps
             }
         
+        # Get original test data for comparison and visualization
+        original_data = self.get_original_test_data(data_path)
+        
         # Create visualization logger if requested
         viz_logger = None
         if save_visualization_data:
@@ -174,9 +177,10 @@ class DeepSTARREvaluator(BaseEvaluator):
                 architecture=architecture,
                 split=split,
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
-                device=self.device
+                device=self.device,
+                original_samples=original_data  # Add original samples for MSE comparison
             )
-            print("  ↳ Visualization data logging enabled with oracle MSE")
+            print("  ↳ Visualization data logging enabled with oracle MSE and original samples")
         
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
@@ -190,9 +194,6 @@ class DeepSTARREvaluator(BaseEvaluator):
             checkpoint_dir = os.path.dirname(checkpoint_path)
             npz_path = os.path.join(checkpoint_dir, "sample.npz")
             self.save_sequences_as_npz(sampled_sequences, npz_path)
-        
-        # Get original test data for comparison
-        original_data = self.get_original_test_data(data_path)
         
         # Compute SP-MSE
         print("Computing SP-MSE...")
