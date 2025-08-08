@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 # Import base framework and MPRA-specific components
 from scripts.evaluate import BaseEvaluator, parse_base_args, main_evaluate
 from model_zoo.mpra.data import get_mpra_datasets
-from model_zoo.mpra.mpra import PL_mpra
+from model_zoo.mpra.mpra import PL_MPRA
 
 
 class MPRAEvaluator(BaseEvaluator):
@@ -47,13 +47,16 @@ class MPRAEvaluator(BaseEvaluator):
     def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
         """Create MPRA dataloader."""
         # Load datasets
-        train_ds, val_ds = get_mpra_datasets()
+        data_path = getattr(config.paths, 'data_file', None)
+        train_ds, val_ds, test_ds = get_mpra_datasets(data_path)
         
         # Select appropriate dataset
         if split == 'train':
             dataset = train_ds
-        elif split in ['val', 'test']:  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
+        elif split == 'test':
+            dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
             
@@ -75,7 +78,7 @@ class MPRAEvaluator(BaseEvaluator):
             if not data_path:
                 data_path = 'model_zoo/mpra/mpra_data.h5'
                 
-            oracle = PL_mpra.load_from_checkpoint(
+            oracle = PL_MPRA.load_from_checkpoint(
                 oracle_checkpoint, 
                 input_h5_file=data_path
             ).eval()
@@ -91,8 +94,8 @@ class MPRAEvaluator(BaseEvaluator):
     def get_original_test_data(self, data_path: str) -> torch.Tensor:
         """Get original test data for SP-MSE comparison."""
         try:
-            # Load MPRA test data
-            train_ds, val_ds = get_mpra_datasets()
+            # Load MPRA test data  
+            train_ds, val_ds = get_mpra_datasets(data_path)
             
             # Create a small batch for comparison
             dataloader = DataLoader(val_ds, batch_size=100, shuffle=False)
@@ -122,8 +125,6 @@ def main():
     """Main evaluation function using base framework."""
     # Parse arguments using base framework
     parser = parse_base_args()
-    parser.add_argument('--model_path', required=True, help='Path to model directory (required for evaluation)')
-    parser.add_argument('--steps', type=int, help='Number of sampling steps (defaults to sequence length)')
     args = parser.parse_args()
     
     # Validate required arguments for evaluation

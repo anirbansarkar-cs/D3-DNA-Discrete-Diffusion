@@ -45,6 +45,9 @@ class MPRASPMSECallback(BaseSPMSEValidationCallback):
         if self.oracle_model is None:
             raise RuntimeError("Oracle model not loaded")
         
+        # Ensure oracle model is on the correct device
+        self.oracle_model = self.oracle_model.to(device)
+        
         # Convert to one-hot if needed
         if sequences.dtype == torch.long:
             sequences_one_hot = F.one_hot(sequences, num_classes=4).float()
@@ -89,6 +92,7 @@ def create_mpra_sp_mse_callback(cfg, dataset_name: str = 'mpra'):
     Returns:
         MPRASPMSECallback instance or None if not enabled
     """
+    _ = dataset_name  # Unused parameter for API consistency
     if not hasattr(cfg, 'sp_mse_validation') or not cfg.sp_mse_validation.get('enabled', False):
         return None
     
@@ -97,13 +101,19 @@ def create_mpra_sp_mse_callback(cfg, dataset_name: str = 'mpra'):
     # Auto-resolve paths if not provided
     oracle_path = sp_mse_cfg.get('oracle_path')
     if oracle_path is None:
-        oracle_path = 'model_zoo/mpra/oracle_models/oracle_mpra_mpra_data.ckpt'
+        if hasattr(cfg, 'paths') and hasattr(cfg.paths, 'oracle_model'):
+            oracle_path = cfg.paths.oracle_model
+        else:
+            oracle_path = 'model_zoo/mpra/oracle_models/oracle_mpra_mpra_data.ckpt'
     
     data_path = sp_mse_cfg.get('data_path')
     if data_path is None:
-        data_path = 'model_zoo/mpra/mpra_data.h5'
+        if hasattr(cfg, 'paths') and hasattr(cfg.paths, 'data_file'):
+            data_path = cfg.paths.data_file
+        else:
+            data_path = 'model_zoo/mpra/mpra_data.h5'
     
-    return MPRASPMSECallback(
+    callback = MPRASPMSECallback(
         oracle_path=oracle_path,
         data_path=data_path,
         validation_freq_epochs=sp_mse_cfg.get('validation_freq_epochs', 4),
@@ -112,3 +122,7 @@ def create_mpra_sp_mse_callback(cfg, dataset_name: str = 'mpra'):
         sampling_steps=sp_mse_cfg.get('sampling_steps'),
         early_stopping_patience=sp_mse_cfg.get('early_stopping_patience')
     )
+    
+    print(f"✓ SP-MSE callback configured to use MPRA oracle: {oracle_path}")
+    
+    return callback
