@@ -304,63 +304,6 @@ class LentIMPRAEvaluator(BaseEvaluator):
             print(f"Warning: Could not get oracle predictions for visualization: {e}")
             return torch.zeros(sequences.shape[0], device=self.device)
     
-    def _get_evaluation_pc_sampler_with_viz(self, graph, noise, batch_dims, steps, viz_logger, oracle_model):
-        """Create a PC sampler that captures oracle MSE at each step during evaluation (LentIMPRA-specific)."""
-        from scripts.sampling import get_predictor, Denoiser
-        from utils.utils import get_score_fn
-        import torch.nn.functional as F
-        
-        predictor = get_predictor('analytic')(graph, noise)
-        denoiser = Denoiser(graph, noise)
-        eps = 1e-5
-        
-        @torch.no_grad()
-        def evaluation_pc_sampler_with_viz(model, labels):
-            sampling_score_fn = get_score_fn(model, train=False, sampling=True)
-            x = graph.sample_limit(*batch_dims).to(self.device)
-            timesteps = torch.linspace(1, eps, steps + 1, device=self.device)
-            dt = (1 - eps) / steps
-
-            for i in range(steps):
-                t = timesteps[i] * torch.ones(x.shape[0], 1, device=self.device)
-                
-                # Get current noise level and score matrix
-                sigma, dsigma = noise(t.squeeze())
-                score_matrix = sampling_score_fn(x, sigma, labels)
-                
-                # Compute oracle MSE for current sequences (LentIMPRA-specific)
-                oracle_mse = None
-                if oracle_model is not None:
-                    try:
-                        # Convert sequences to one-hot for oracle prediction
-                        x_one_hot = F.one_hot(x, num_classes=4).float()
-                        oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
-                        
-                        # Compute MSE per sample (similar to DeepSTARR approach)
-                        oracle_mse = oracle_predictions.pow(2).mean(dim=-1)  # MSE per sample
-                    except Exception as e:
-                        print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
-                        oracle_mse = None
-                
-                # Log the step data
-                viz_logger.log_step(
-                    step=i,
-                    timestep=timesteps[i].item(),
-                    sequences=x,
-                    score_matrix=score_matrix,
-                    noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
-                    noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
-                    oracle_mse=oracle_mse
-                )
-                
-                x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
-
-            # Final denoising step
-            x = denoiser.update_fn(sampling_score_fn, x, labels, timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device))
-            
-            return x
-        
-        return evaluation_pc_sampler_with_viz
 
 
 def load_default_config():
