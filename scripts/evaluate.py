@@ -197,6 +197,13 @@ class BaseEvaluator:
                 sigma, dsigma = noise(t.squeeze())
                 score_matrix = sampling_score_fn(x, sigma, labels)
                 
+                # Calculate prob_matrix following the same pattern as AnalyticPredictor
+                curr_sigma = sigma
+                next_sigma = noise(t.squeeze() - dt)[0]
+                dsigma_step = curr_sigma - next_sigma
+                stag_score = graph.staggered_score(score_matrix, dsigma_step)
+                prob_matrix = stag_score * graph.transp_transition(x, dsigma_step)
+                
                 # Compute oracle MSE for current sequences
                 oracle_mse = None
                 if oracle_model is not None:
@@ -218,6 +225,7 @@ class BaseEvaluator:
                     timestep=timesteps[i].item(),
                     sequences=x,
                     score_matrix=score_matrix,
+                    prob_matrix=prob_matrix,
                     noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
                     noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
                     oracle_mse=oracle_mse

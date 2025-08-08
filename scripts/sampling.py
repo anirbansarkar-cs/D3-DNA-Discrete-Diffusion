@@ -145,12 +145,20 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
                 # Get score matrix for visualization
                 score_matrix = sampling_score_fn(x, sigma, labels)
                 
+                # Calculate prob_matrix following the same pattern as AnalyticPredictor
+                curr_sigma = sigma
+                next_sigma = noise(t.squeeze() - dt)[0]
+                dsigma_step = curr_sigma - next_sigma
+                stag_score = graph.staggered_score(score_matrix, dsigma_step)
+                prob_matrix = stag_score * graph.transp_transition(x, dsigma_step)
+                
                 # Log the step data
                 viz_logger.log_step(
                     step=i,
                     timestep=timesteps[i].item(),
                     sequences=x,
                     score_matrix=score_matrix,
+                    prob_matrix=prob_matrix,
                     noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
                     noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item()
                 )
@@ -169,11 +177,16 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
                 sigma = noise(t.squeeze())[0]
                 score_matrix = sampling_score_fn(x, sigma, labels)
                 
+                # Calculate prob_matrix for final denoising step following Denoiser pattern
+                stag_score = graph.staggered_score(score_matrix, sigma)
+                prob_matrix = stag_score * graph.transp_transition(x, sigma)
+                
                 viz_logger.log_step(
                     step=steps,  # Final denoising step
                     timestep=timesteps[-1].item(),
                     sequences=x,
                     score_matrix=score_matrix,
+                    prob_matrix=prob_matrix,
                     noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
                     noise_rate=None  # No noise rate for final step
                 )

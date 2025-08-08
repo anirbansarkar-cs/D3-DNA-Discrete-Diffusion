@@ -85,6 +85,7 @@ class VisualizationDataLogger:
                  timestep: float,
                  sequences: torch.Tensor,
                  score_matrix: torch.Tensor,
+                 prob_matrix: Optional[torch.Tensor] = None,
                  noise_level: float,
                  noise_rate: Optional[float] = None,
                  oracle_mse: Optional[torch.Tensor] = None):
@@ -96,6 +97,7 @@ class VisualizationDataLogger:
             timestep: Current diffusion timestep (1.0 to eps)
             sequences: Current sequences (batch_size, seq_length)
             score_matrix: Score matrix from model (batch_size, seq_length, 4)
+            prob_matrix: Probability matrix from staggered score (batch_size, seq_length, 4), optional
             noise_level: Current noise level (sigma)
             noise_rate: Rate of noise change (dsigma), optional
             oracle_mse: Oracle MSE predictions (batch_size,), optional
@@ -111,6 +113,16 @@ class VisualizationDataLogger:
             # Fallback if float16 conversion fails
             pass
         
+        # Handle prob_matrix if provided
+        prob_matrix_cpu = None
+        if prob_matrix is not None:
+            prob_matrix_cpu = prob_matrix.detach().cpu()
+            try:
+                prob_matrix_cpu = prob_matrix_cpu.to(torch.float16)
+            except (RuntimeError, AttributeError):
+                # Fallback if float16 conversion fails
+                pass
+        
         step_entry = {
             'step': step,
             'timestep': timestep,
@@ -118,6 +130,10 @@ class VisualizationDataLogger:
             'score_matrix': score_matrix_cpu,
             'noise_level': noise_level,
         }
+        
+        # Add prob_matrix if provided
+        if prob_matrix_cpu is not None:
+            step_entry['prob_matrix'] = prob_matrix_cpu
         
         # Add optional data
         if noise_rate is not None:
@@ -183,6 +199,13 @@ class VisualizationDataLogger:
                     score_data = score_data.to(torch.float16)
                 step_group.create_dataset('score_matrix', data=score_data.numpy())
                 
+                # Handle prob matrix if available
+                if 'prob_matrix' in step_entry:
+                    prob_data = step_entry['prob_matrix']
+                    if hasattr(prob_data, 'dtype') and prob_data.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+                        prob_data = prob_data.to(torch.float16)
+                    step_group.create_dataset('prob_matrix', data=prob_data.numpy())
+                
                 # Save oracle MSE if available
                 if 'oracle_mse' in step_entry:
                     step_group.create_dataset('oracle_mse', data=step_entry['oracle_mse'].numpy())
@@ -233,6 +256,13 @@ class VisualizationDataLogger:
             if score_matrices.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
                 score_matrices = score_matrices.to(torch.float16)
             save_dict['score_matrices'] = score_matrices.numpy()  # Shape: (num_steps, batch_size, seq_length, 4)
+            
+            # Stack prob matrices if available
+            if 'prob_matrix' in self.step_data[0]:
+                prob_matrices = torch.stack([entry['prob_matrix'] for entry in self.step_data], dim=0)
+                if prob_matrices.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+                    prob_matrices = prob_matrices.to(torch.float16)
+                save_dict['prob_matrices'] = prob_matrices.numpy()  # Shape: (num_steps, batch_size, seq_length, 4)
             
             # Stack oracle MSE if available
             if self.save_oracle_mse and 'oracle_mse' in self.step_data[0]:
