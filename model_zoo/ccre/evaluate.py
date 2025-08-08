@@ -306,10 +306,20 @@ class cCREEvaluator(BaseEvaluator):
         if save_visualization_data:
             dataloader = self.create_dataloader(config, split, batch_size, max_samples)
             
+            # Get original test data for potential future use
+            original_data = self.get_original_test_data(data_path)
+            
             # Create visualization logger
             from utils.visualization_logger import create_visualization_logger
             sequence_length = self.get_sequence_length(config)
             actual_samples = len(dataloader.dataset)
+            
+            # Convert original samples to token indices for visualization storage
+            original_samples_indices = None
+            if original_data is not None:
+                # Convert from (batch_size, 4, seq_length) to (batch_size, seq_length)
+                original_samples_indices = torch.argmax(original_data, dim=1)
+            
             viz_logger = create_visualization_logger(
                 num_samples=actual_samples,
                 sequence_length=sequence_length,
@@ -318,9 +328,10 @@ class cCREEvaluator(BaseEvaluator):
                 architecture=architecture,
                 split=split,
                 save_oracle_mse=False,  # No oracle for cCRE
-                device=self.device
+                device=self.device,
+                original_samples=original_samples_indices  # Add original samples for completeness
             )
-            print(f"  ↳ Visualization data logging enabled ({actual_samples} samples)")
+            print(f"  ↳ Visualization data logging enabled with original samples ({actual_samples} samples)")
             
             # Sample sequences using PC sampler for visualization
             print(f"Sampling sequences with PC sampler ({steps} steps) for visualization...")
