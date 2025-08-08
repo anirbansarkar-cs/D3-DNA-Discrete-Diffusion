@@ -299,10 +299,17 @@ class LentIMPRAEvaluator(BaseEvaluator):
         try:
             # Convert from (batch, length, channels) to (batch, channels, length) for LegNet
             sequences_input = sequences.permute(0, 2, 1).to(self.device)
-            return oracle_model.predict(sequences_input)
+            predictions = oracle_model.predict(sequences_input)
+            
+            # If predictions is 1D (batch_size,), reshape to (batch_size, 1) for proper MSE computation
+            # This ensures oracle_predictions.pow(2).mean(dim=-1) gives per-sample MSE values
+            if len(predictions.shape) == 1:
+                predictions = predictions.unsqueeze(-1)
+                
+            return predictions
         except Exception as e:
             print(f"Warning: Could not get oracle predictions for visualization: {e}")
-            return torch.zeros(sequences.shape[0], device=self.device)
+            return torch.zeros(sequences.shape[0], 1, device=self.device)
     
 
 
