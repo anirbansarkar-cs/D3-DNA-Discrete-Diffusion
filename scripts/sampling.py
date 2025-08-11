@@ -80,6 +80,9 @@ class AnalyticPredictor(Predictor):
         dsigma = curr_sigma - next_sigma
 
         score = score_fn(x, curr_sigma, labels)
+        
+        # Normalize score
+        # score = score / score.sum(dim=-1, keepdim=True)
 
         stag_score = self.graph.staggered_score(score, dsigma)
         # print (stag_score.shape)

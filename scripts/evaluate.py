@@ -197,6 +197,9 @@ class BaseEvaluator:
                 sigma, dsigma = noise(t.squeeze())
                 score_matrix = sampling_score_fn(x, sigma, labels)
                 
+                # Normalize score matrix
+                # score_matrix = score_matrix / score_matrix.sum(dim=-1, keepdim=True)
+                
                 # Calculate prob_matrix following the same pattern as AnalyticPredictor
                 curr_sigma = noise(t)[0]
                 next_sigma = noise(t - dt)[0]
