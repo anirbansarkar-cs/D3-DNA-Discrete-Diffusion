@@ -249,7 +249,7 @@ class CAGI5VEPProcessor:
         else:
             step_indices = [default_sigma_idx]
         
-        for step_idx in tqdm(step_indices, desc="Processing noise steps"):
+        for step_counter, step_idx in enumerate(tqdm(step_indices, desc="Processing noise steps")):
             sigma = sigma_values[step_idx]
             step_results = {
                 'ref_representations': [],
@@ -304,7 +304,7 @@ class CAGI5VEPProcessor:
             if step_idx == default_sigma_idx:
                 results['default_step'] = step_results
             if save_intermediates:
-                results['all_steps'][f'step_{step_idx}'] = step_results
+                results['all_steps'][f'step_{step_counter:03d}'] = step_results
         
         return results
     
@@ -338,7 +338,7 @@ class CAGI5VEPProcessor:
         else:
             step_indices = [default_sigma_idx]
         
-        for step_idx in tqdm(step_indices, desc="Processing noise steps"):
+        for step_counter, step_idx in enumerate(tqdm(step_indices, desc="Processing noise steps")):
             sigma = sigma_values[step_idx]
             step_results = {
                 'ref_score_matrices': [],
@@ -412,7 +412,7 @@ class CAGI5VEPProcessor:
             if step_idx == default_sigma_idx:
                 results['default_step'] = step_results
             if save_intermediates:
-                results['all_steps'][f'step_{step_idx}'] = step_results
+                results['all_steps'][f'step_{step_counter:03d}'] = step_results
         
         return results
     
@@ -754,8 +754,8 @@ class CAGI5VEPProcessor:
         # All steps (if available)
         if cosine_results['all_steps'] is not None:
             all_steps_group = cosine_group.create_group('all_steps')
-            # Sort steps by step index to ensure proper ordering
-            sorted_steps = sorted(cosine_results['all_steps'].items(), key=lambda x: int(x[0].split('_')[1]))
+            # Sort steps by step name (already properly ordered with 3-digit format)
+            sorted_steps = sorted(cosine_results['all_steps'].items())
             for step_name, step_data in sorted_steps:
                 step_group = all_steps_group.create_group(step_name)
                 step_group.create_dataset('ref_representations', data=step_data['ref_representations'].float().numpy())
@@ -780,8 +780,8 @@ class CAGI5VEPProcessor:
         # All steps (if available)
         if score_matrix_results['all_steps'] is not None:
             all_steps_group = score_group.create_group('all_steps')
-            # Sort steps by step index to ensure proper ordering
-            sorted_steps = sorted(score_matrix_results['all_steps'].items(), key=lambda x: int(x[0].split('_')[1]))
+            # Sort steps by step name (already properly ordered with 3-digit format)
+            sorted_steps = sorted(score_matrix_results['all_steps'].items())
             for step_name, step_data in sorted_steps:
                 step_group = all_steps_group.create_group(step_name)
                 step_group.create_dataset('ref_score_matrices', data=step_data['ref_score_matrices'].float().numpy())
@@ -831,8 +831,8 @@ class CAGI5VEPProcessor:
             all_steps_group = eval_group.create_group('all_steps_metrics')
             for method_name, method_data in evaluation_results['all_steps_metrics'].items():
                 method_group = all_steps_group.create_group(method_name)
-                # Sort steps by step index to ensure proper ordering
-                sorted_steps = sorted(method_data.items(), key=lambda x: int(x[0].split('_')[1]))
+                # Sort steps by step name (already properly ordered with 3-digit format)
+                sorted_steps = sorted(method_data.items())
                 for step_name, step_data in sorted_steps:
                     step_group = method_group.create_group(step_name)
                     
