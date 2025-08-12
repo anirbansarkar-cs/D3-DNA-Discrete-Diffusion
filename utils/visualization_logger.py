@@ -36,7 +36,8 @@ class VisualizationDataLogger:
                  device: torch.device = None,
                  original_samples: Optional[torch.Tensor] = None,
                  ground_truth_labels: Optional[torch.Tensor] = None,
-                 ground_truth_predictions: Optional[torch.Tensor] = None):
+                 ground_truth_predictions: Optional[torch.Tensor] = None,
+                 dataset_indices: Optional[torch.Tensor] = None):
         """
         Initialize the visualization data logger.
         
@@ -96,6 +97,13 @@ class VisualizationDataLogger:
             
         if self.ground_truth_predictions is not None:
             self.metadata['ground_truth_predictions'] = self.ground_truth_predictions
+            
+        # Add dataset indices to metadata if provided
+        if dataset_indices is not None:
+            self.dataset_indices = dataset_indices.detach().cpu()
+            self.metadata['dataset_indices'] = self.dataset_indices
+        else:
+            self.dataset_indices = None
         
         print(f"✓ Visualization logger initialized for {num_samples} samples, {num_steps} steps")
         if save_oracle_mse:
@@ -191,7 +199,7 @@ class VisualizationDataLogger:
                     for subkey, subvalue in value.items():
                         if subvalue is not None:
                             subgroup.attrs[subkey] = subvalue
-                elif key in ['original_samples', 'ground_truth_labels', 'ground_truth_predictions'] and value is not None:
+                elif key in ['original_samples', 'ground_truth_labels', 'ground_truth_predictions', 'dataset_indices'] and value is not None:
                     # Save tensor data as dataset in metadata
                     metadata_group.create_dataset(key, data=value.numpy())
                 elif value is not None:
@@ -254,7 +262,7 @@ class VisualizationDataLogger:
                 # Flatten nested dictionaries
                 for subkey, subvalue in value.items():
                     save_dict[f'{key}_{subkey}'] = subvalue
-            elif key in ['original_samples', 'ground_truth_labels', 'ground_truth_predictions'] and value is not None:
+            elif key in ['original_samples', 'ground_truth_labels', 'ground_truth_predictions', 'dataset_indices'] and value is not None:
                 # Save tensor data directly (not as meta_ prefix)
                 save_dict[key] = value.numpy()
             else:
@@ -334,7 +342,8 @@ def create_visualization_logger(num_samples: int,
                                device: torch.device = None,
                                original_samples: Optional[torch.Tensor] = None,
                                ground_truth_labels: Optional[torch.Tensor] = None,
-                               ground_truth_predictions: Optional[torch.Tensor] = None) -> VisualizationDataLogger:
+                               ground_truth_predictions: Optional[torch.Tensor] = None,
+                               dataset_indices: Optional[torch.Tensor] = None) -> VisualizationDataLogger:
     """
     Factory function to create a visualization data logger.
     
@@ -350,6 +359,7 @@ def create_visualization_logger(num_samples: int,
         original_samples: Original samples for MSE comparison (evaluation only)
         ground_truth_labels: Ground truth labels (target labels) for visualization
         ground_truth_predictions: Ground truth oracle predictions for proper MSE calculation
+        dataset_indices: Dataset indices used for sample selection (for reproducibility)
     
     Returns:
         VisualizationDataLogger instance
@@ -365,5 +375,6 @@ def create_visualization_logger(num_samples: int,
         device=device,
         original_samples=original_samples,
         ground_truth_labels=ground_truth_labels,
-        ground_truth_predictions=ground_truth_predictions
+        ground_truth_predictions=ground_truth_predictions,
+        dataset_indices=dataset_indices
     )

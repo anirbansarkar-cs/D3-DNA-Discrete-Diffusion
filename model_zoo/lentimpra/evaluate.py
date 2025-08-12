@@ -44,7 +44,7 @@ class LentIMPRAEvaluator(BaseEvaluator):
         """Get LentIMPRA sequence length."""
         return 230  # LentIMPRA fixed sequence length
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None, specific_indices: Optional[str] = None):
         """Create LentIMPRA dataloader with optional sample limiting."""
         # Load datasets
         train_ds, val_ds, test_ds = get_lentimpra_datasets(config.paths.data_file)
@@ -59,11 +59,36 @@ class LentIMPRAEvaluator(BaseEvaluator):
         else:
             raise ValueError(f"Unknown split: {split}")
         
-        # Limit dataset size if max_samples is specified
+        # Handle dataset subsetting with specific indices or random sampling
         if max_samples is not None and len(dataset) > max_samples:
-            # Create random subset
             import torch.utils.data as data_utils
-            indices = torch.randperm(len(dataset))[:max_samples]
+            
+            # Parse specific indices if provided
+            selected_indices = []
+            if specific_indices:
+                try:
+                    selected_indices = [int(idx.strip()) for idx in specific_indices.split(',')]
+                    # Validate indices are within dataset bounds
+                    selected_indices = [idx for idx in selected_indices if 0 <= idx < len(dataset)]
+                    print(f"  ↳ Guaranteed selection of indices: {selected_indices}")
+                except ValueError:
+                    print(f"  ↳ Warning: Invalid specific_indices format '{specific_indices}', ignoring")
+                    selected_indices = []
+            
+            # Fill remaining slots with random indices if needed
+            num_selected = len(selected_indices)
+            if num_selected < max_samples:
+                # Get remaining indices to sample from
+                all_indices = set(range(len(dataset)))
+                remaining_indices = list(all_indices - set(selected_indices))
+                
+                if remaining_indices:
+                    num_random = min(max_samples - num_selected, len(remaining_indices))
+                    random_indices = torch.randperm(len(remaining_indices))[:num_random].tolist()
+                    selected_indices.extend([remaining_indices[i] for i in random_indices])
+            
+            # Create subset with selected indices
+            indices = torch.tensor(selected_indices[:max_samples])
             dataset = data_utils.Subset(dataset, indices)
             # Store the indices for matching original data later
             self._dataset_indices = indices
@@ -190,7 +215,8 @@ class LentIMPRAEvaluator(BaseEvaluator):
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
                               show_progress: bool = False, save_sequences: bool = False,
                               save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
-                              viz_format: str = 'hdf5', max_samples: Optional[int] = None):
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None,
+                              specific_indices: Optional[str] = None):
         """
         Override base method to handle LentIMPRA-specific visualization and evaluation.
         """
@@ -202,7 +228,7 @@ class LentIMPRAEvaluator(BaseEvaluator):
             print(f"Using default steps: {steps} (sequence length)")
         
         # Create dataloader with optional sample limiting
-        dataloader = self.create_dataloader(config, split, batch_size, max_samples)
+        dataloader = self.create_dataloader(config, split, batch_size, max_samples, specific_indices)
         
         # Load oracle model
         print("Loading oracle model for SP-MSE evaluation...")
@@ -240,7 +266,8 @@ class LentIMPRAEvaluator(BaseEvaluator):
                 split=split,
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
                 device=self.device,
-                original_samples=original_samples_indices  # Add original samples as token indices
+                original_samples=original_samples_indices,  # Add original samples as token indices
+                dataset_indices=self._dataset_indices  # Add dataset indices for reproducibility
             )
             print(f"  ↳ Visualization data logging enabled with oracle MSE and original samples ({actual_samples} samples)")
         
@@ -365,7 +392,8 @@ def main():
         save_visualization_data=getattr(args, 'save_viz_data', False),
         viz_output_path=getattr(args, 'viz_output', None),
         viz_format=getattr(args, 'viz_format', 'hdf5'),
-        max_samples=getattr(args, 'max_samples', None)
+        max_samples=getattr(args, 'max_samples', None),
+        specific_indices=getattr(args, 'specific_indices', None)
     )
     
     # Print and save results

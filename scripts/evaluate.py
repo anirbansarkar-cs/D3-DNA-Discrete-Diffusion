@@ -48,7 +48,7 @@ class BaseEvaluator:
         """
         raise NotImplementedError("Subclasses must implement load_model()")
     
-    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None):
+    def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None, max_samples: Optional[int] = None, specific_indices: Optional[str] = None):
         """
         Create dataloader for evaluation. Must be implemented by subclasses.
         
@@ -57,6 +57,7 @@ class BaseEvaluator:
             split: Dataset split ('train', 'val', 'test')
             batch_size: Batch size (if None, uses config default)
             max_samples: Maximum number of samples to evaluate (if None, uses entire dataset)
+            specific_indices: Comma-separated indices to guarantee selection (e.g., "11,12,40")
             
         Returns:
             DataLoader instance
@@ -397,7 +398,8 @@ class BaseEvaluator:
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
                               show_progress: bool = False, save_sequences: bool = False,
                               save_visualization_data: bool = False, viz_output_path: Optional[str] = None,
-                              viz_format: str = 'hdf5', max_samples: Optional[int] = None) -> Dict[str, Any]:
+                              viz_format: str = 'hdf5', max_samples: Optional[int] = None,
+                              specific_indices: Optional[str] = None) -> Dict[str, Any]:
         """
         Evaluate model by sampling sequences and computing SP-MSE with oracle.
         
@@ -416,6 +418,7 @@ class BaseEvaluator:
             viz_output_path: Output path for visualization data
             viz_format: Format for visualization data ('hdf5', 'npz')
             max_samples: Maximum number of samples to evaluate (if None, uses entire dataset)
+            specific_indices: Comma-separated indices to guarantee selection (e.g., "11,12,40")
             
         Returns:
             Dictionary of evaluation results including SP-MSE
@@ -428,7 +431,7 @@ class BaseEvaluator:
             print(f"Using default steps: {steps} (sequence length)")
         
         # Create dataloader with optional sample limiting
-        dataloader = self.create_dataloader(config, split, batch_size, max_samples)
+        dataloader = self.create_dataloader(config, split, batch_size, max_samples, specific_indices)
         
         # Print evaluation info
         if max_samples is not None:
@@ -458,7 +461,8 @@ class BaseEvaluator:
                 architecture=architecture,
                 split=split,
                 save_oracle_mse=True,  # Enable oracle MSE for evaluation
-                device=self.device
+                device=self.device,
+                dataset_indices=getattr(self, '_dataset_indices', None)  # Add dataset indices if available
             )
             print(f"  ↳ Visualization data logging enabled with oracle MSE ({actual_samples} samples)")
         
@@ -599,6 +603,7 @@ def parse_base_args():
     
     # Evaluation sample limiting
     parser.add_argument('--max_samples', type=int, help='Maximum number of samples to evaluate (randomly selected if less than dataset size)')
+    parser.add_argument('--specific_indices', type=str, help='Comma-separated indices to guarantee selection (e.g., "11,12,40"), will randomly fill remaining slots if max_samples is larger')
     
     return parser
 
@@ -650,7 +655,8 @@ def main_evaluate(evaluator: BaseEvaluator, args):
         save_visualization_data=args.save_viz_data,
         viz_output_path=args.viz_output,
         viz_format=args.viz_format,
-        max_samples=args.max_samples
+        max_samples=args.max_samples,
+        specific_indices=args.specific_indices
     )
     
     # Print results
