@@ -150,6 +150,51 @@ class CAGI5VEPProcessor:
         self.ref_nucleotides = torch.tensor(self.ref_nucleotides, dtype=torch.long)
         self.alt_nucleotides = torch.tensor(self.alt_nucleotides, dtype=torch.long)
         
+    def filter_samples_by_gene(self, samples_per_gene: Optional[int] = None):
+        """
+        Filter data to select a random subset of samples per gene.
+        
+        Args:
+            samples_per_gene: Number of random samples to select per gene (None = use all)
+        """
+        if samples_per_gene is None:
+            return  # No filtering needed
+            
+        print(f"Filtering to {samples_per_gene} random samples per gene...")
+        
+        # Get unique genes
+        unique_genes = self.metadata_df['gene'].unique()
+        selected_indices = []
+        
+        for gene in unique_genes:
+            gene_mask = self.metadata_df['gene'] == gene
+            gene_indices = self.metadata_df.index[gene_mask].tolist()
+            
+            if len(gene_indices) <= samples_per_gene:
+                # Use all samples if gene has fewer than requested
+                selected_indices.extend(gene_indices)
+                print(f"  {gene}: Using all {len(gene_indices)} samples")
+            else:
+                # Randomly sample requested number
+                import random
+                random.seed(42)  # For reproducibility
+                sampled_indices = random.sample(gene_indices, samples_per_gene)
+                selected_indices.extend(sampled_indices)
+                print(f"  {gene}: Randomly selected {samples_per_gene} from {len(gene_indices)} samples")
+        
+        # Sort indices to maintain order
+        selected_indices.sort()
+        
+        # Filter all data arrays
+        self.ref_sequences = self.ref_sequences[selected_indices]
+        self.alt_sequences = self.alt_sequences[selected_indices]
+        self.mutation_positions = self.mutation_positions[selected_indices]
+        self.ref_nucleotides = self.ref_nucleotides[selected_indices]
+        self.alt_nucleotides = self.alt_nucleotides[selected_indices]
+        self.metadata_df = self.metadata_df.iloc[selected_indices].reset_index(drop=True)
+        
+        print(f"✓ Filtered dataset: {len(selected_indices)} total samples across {len(unique_genes)} genes")
+        
     def generate_noise_schedule(self, num_steps: int, eps: float = 1e-5) -> Tuple[torch.Tensor, int]:
         """
         Generate noise schedule for sampling.
@@ -310,14 +355,12 @@ class CAGI5VEPProcessor:
                 
                 # Get batch data
                 ref_batch = self.ref_sequences[batch_start:batch_end].to(self.device)
-                alt_batch = self.alt_sequences[batch_start:batch_end].to(self.device)
                 mut_pos_batch = self.mutation_positions[batch_start:batch_end]
                 ref_nuc_batch = self.ref_nucleotides[batch_start:batch_end]
                 alt_nuc_batch = self.alt_nucleotides[batch_start:batch_end]
                 
                 # Convert from one-hot to token indices for model input
                 ref_tokens = torch.argmax(ref_batch, dim=-1)  # (batch, 230)
-                alt_tokens = torch.argmax(alt_batch, dim=-1)  # (batch, 230)
                 
                 # Create sigma tensor for batch
                 batch_sigma = sigma.repeat(ref_tokens.shape[0]).to(self.device)
@@ -838,6 +881,8 @@ def parse_args():
                        help='Batch size for processing')
     parser.add_argument('--device', choices=['cuda', 'cpu'], default='cuda',
                        help='Device for computation')
+    parser.add_argument('--samples_per_gene', type=int, default=None,
+                       help='Number of random samples to select per gene (default: use all samples)')
     
     return parser.parse_args()
 
@@ -929,6 +974,10 @@ def main():
     # Load model and data
     processor.load_model()
     processor.load_cagi5_data(args.cagi5_h5, args.cagi5_csv)
+    
+    # Filter samples per gene if requested
+    if args.samples_per_gene is not None:
+        processor.filter_samples_by_gene(args.samples_per_gene)
     
     print(f"\n🚀 Starting variant effect prediction...")
     print(f"   Method: {args.method}")
