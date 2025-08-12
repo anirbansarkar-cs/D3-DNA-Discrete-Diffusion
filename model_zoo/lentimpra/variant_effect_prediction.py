@@ -120,11 +120,10 @@ class CAGI5VEPProcessor:
         self.ref_nucleotides = []
         self.alt_nucleotides = []
         
-        nucleotide_map = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
         
-        for i in range(n_sequences):
-            ref_seq = self.ref_sequences[i]  # (230, 4)
-            alt_seq = self.alt_sequences[i]  # (230, 4)
+        for seq_idx in range(n_sequences):
+            ref_seq = self.ref_sequences[seq_idx]  # (230, 4)
+            alt_seq = self.alt_sequences[seq_idx]  # (230, 4)
             
             # Find mutation position by comparing sequences
             diff_mask = (ref_seq != alt_seq).any(dim=1)  # (230,)
@@ -132,7 +131,7 @@ class CAGI5VEPProcessor:
             
             if len(mutation_positions) == 0:
                 # No mutation found - this shouldn't happen in CAGI5 data
-                print(f"Warning: No mutation found for sequence {i}")
+                print(f"Warning: No mutation found for sequence {seq_idx}")
                 self.mutation_positions.append(115)  # Use center position as fallback
                 self.ref_nucleotides.append(0)
                 self.alt_nucleotides.append(1)
@@ -193,7 +192,6 @@ class CAGI5VEPProcessor:
         print("Computing cosine similarity predictions...")
         
         n_sequences = len(self.ref_sequences)
-        score_fn = get_score_fn(self.model, train=False, sampling=False)
         
         results = {
             'default_step': {},
@@ -372,13 +370,15 @@ class CAGI5VEPProcessor:
         return results
     
     def evaluate_predictions(self, cosine_results: Optional[Dict] = None, 
-                           score_matrix_results: Optional[Dict] = None) -> Dict[str, Any]:
+                           score_matrix_results: Optional[Dict] = None, 
+                           save_intermediates: bool = False) -> Dict[str, Any]:
         """
         Evaluate predictions against ground truth using Pearson correlation.
         
         Args:
             cosine_results: Cosine similarity prediction results
             score_matrix_results: Score matrix prediction results
+            save_intermediates: Whether intermediate steps were saved (affects evaluation scope)
             
         Returns:
             Dictionary containing evaluation metrics
@@ -390,6 +390,10 @@ class CAGI5VEPProcessor:
             'per_gene_results': {},
             'per_cell_line_results': {}
         }
+        
+        # If save_intermediates, also evaluate all steps
+        if save_intermediates:
+            evaluation_results['all_steps_metrics'] = {}
         
         # Get ground truth scores
         ground_truth = torch.tensor(self.metadata_df['score'].values, dtype=torch.float32)
@@ -462,10 +466,118 @@ class CAGI5VEPProcessor:
             
             evaluation_results['per_cell_line_results'][method_name] = cell_line_results
         
+        # If save_intermediates, evaluate all intermediate steps
+        if save_intermediates:
+            self._evaluate_all_steps(cosine_results, score_matrix_results, evaluation_results, ground_truth, genes, cell_lines, unique_genes, unique_cell_lines)
+        
         # Compute CAGI5-specific metrics (K562 vs HepG2 aggregation)
         self._compute_cagi5_metrics(evaluation_results)
         
         return evaluation_results
+    
+    def _evaluate_single_step(self, predictions: torch.Tensor, ground_truth: torch.Tensor, 
+                            genes: np.ndarray, cell_lines: np.ndarray, 
+                            unique_genes: list, unique_cell_lines: list) -> Dict[str, Any]:
+        """
+        Evaluate a single set of predictions against ground truth.
+        
+        Args:
+            predictions: Prediction scores
+            ground_truth: Ground truth scores
+            genes: Gene names array
+            cell_lines: Cell line names array
+            unique_genes: List of unique genes
+            unique_cell_lines: List of unique cell lines
+            
+        Returns:
+            Dictionary containing evaluation metrics for this step
+        """
+        step_results = {}
+        
+        # Overall correlation
+        overall_r, overall_p = pearsonr(predictions.numpy(), ground_truth.numpy())
+        step_results['overall'] = {
+            'pearson_r': overall_r,
+            'p_value': overall_p
+        }
+        
+        # Per-gene evaluation
+        gene_results = {
+            'gene_names': unique_genes,
+            'pearson_correlations': [],
+            'p_values': [],
+            'sample_counts': []
+        }
+        
+        for gene in unique_genes:
+            gene_mask = genes == gene
+            if gene_mask.sum() > 1:  # Need at least 2 samples for correlation
+                gene_predictions = predictions[gene_mask].numpy()
+                gene_ground_truth = ground_truth[gene_mask].numpy()
+                gene_r, gene_p = pearsonr(gene_predictions, gene_ground_truth)
+                gene_results['pearson_correlations'].append(gene_r)
+                gene_results['p_values'].append(gene_p)
+                gene_results['sample_counts'].append(len(gene_predictions))
+            else:
+                gene_results['pearson_correlations'].append(np.nan)
+                gene_results['p_values'].append(np.nan)
+                gene_results['sample_counts'].append(gene_mask.sum().item())
+        
+        step_results['per_gene'] = gene_results
+        
+        # Per-cell-line evaluation
+        cell_line_results = {
+            'cell_line_names': unique_cell_lines,
+            'pearson_correlations': [],
+            'p_values': [],
+            'sample_counts': []
+        }
+        
+        for cell_line in unique_cell_lines:
+            cell_line_mask = cell_lines == cell_line
+            if cell_line_mask.sum() > 1:
+                cl_predictions = predictions[cell_line_mask].numpy()
+                cl_ground_truth = ground_truth[cell_line_mask].numpy()
+                cl_r, cl_p = pearsonr(cl_predictions, cl_ground_truth)
+                cell_line_results['pearson_correlations'].append(cl_r)
+                cell_line_results['p_values'].append(cl_p)
+                cell_line_results['sample_counts'].append(len(cl_predictions))
+            else:
+                cell_line_results['pearson_correlations'].append(np.nan)
+                cell_line_results['p_values'].append(np.nan)
+                cell_line_results['sample_counts'].append(cell_line_mask.sum().item())
+        
+        step_results['per_cell_line'] = cell_line_results
+        
+        return step_results
+    
+    def _evaluate_all_steps(self, cosine_results: Optional[Dict], score_matrix_results: Optional[Dict], 
+                          evaluation_results: Dict, ground_truth: torch.Tensor, genes: np.ndarray, 
+                          cell_lines: np.ndarray, unique_genes: list, unique_cell_lines: list):
+        """Evaluate all intermediate steps when save_intermediates=True."""
+        print("  Evaluating all intermediate steps...")
+        
+        # Evaluate cosine similarity for all steps
+        if cosine_results is not None and cosine_results['all_steps'] is not None:
+            evaluation_results['all_steps_metrics']['cosine_method'] = {}
+            for step_name, step_data in cosine_results['all_steps'].items():
+                predictions = step_data['cosine_scores']
+                step_results = self._evaluate_single_step(
+                    predictions, ground_truth, genes, cell_lines, unique_genes, unique_cell_lines
+                )
+                step_results['noise_level'] = step_data['noise_level']
+                evaluation_results['all_steps_metrics']['cosine_method'][step_name] = step_results
+        
+        # Evaluate score matrix for all steps  
+        if score_matrix_results is not None and score_matrix_results['all_steps'] is not None:
+            evaluation_results['all_steps_metrics']['score_matrix_method'] = {}
+            for step_name, step_data in score_matrix_results['all_steps'].items():
+                predictions = step_data['score_differences']
+                step_results = self._evaluate_single_step(
+                    predictions, ground_truth, genes, cell_lines, unique_genes, unique_cell_lines
+                )
+                step_results['noise_level'] = step_data['noise_level']
+                evaluation_results['all_steps_metrics']['score_matrix_method'][step_name] = step_results
     
     def _compute_cagi5_metrics(self, evaluation_results: Dict):
         """
@@ -662,6 +774,42 @@ class CAGI5VEPProcessor:
                 method_group.create_dataset('p_values',
                                           data=[p if not np.isnan(p) else -999.0 for p in cl_data['p_values']])
                 method_group.create_dataset('sample_counts', data=cl_data['sample_counts'])
+        
+        # All steps metrics (if save_intermediates was True)
+        if 'all_steps_metrics' in evaluation_results:
+            all_steps_group = eval_group.create_group('all_steps_metrics')
+            for method_name, method_data in evaluation_results['all_steps_metrics'].items():
+                method_group = all_steps_group.create_group(method_name)
+                for step_name, step_data in method_data.items():
+                    step_group = method_group.create_group(step_name)
+                    
+                    # Save noise level
+                    step_group.create_dataset('noise_level', data=step_data['noise_level'])
+                    
+                    # Save overall metrics
+                    overall_group = step_group.create_group('overall')
+                    overall_group.create_dataset('pearson_r', data=step_data['overall']['pearson_r'])
+                    overall_group.create_dataset('p_value', data=step_data['overall']['p_value'])
+                    
+                    # Save per-gene metrics
+                    gene_group = step_group.create_group('per_gene')
+                    gene_data = step_data['per_gene']
+                    gene_group.create_dataset('gene_names', data=[g.encode() for g in gene_data['gene_names']])
+                    gene_group.create_dataset('pearson_correlations',
+                                            data=[r if not np.isnan(r) else -999.0 for r in gene_data['pearson_correlations']])
+                    gene_group.create_dataset('p_values',
+                                            data=[p if not np.isnan(p) else -999.0 for p in gene_data['p_values']])
+                    gene_group.create_dataset('sample_counts', data=gene_data['sample_counts'])
+                    
+                    # Save per-cell-line metrics
+                    cl_group = step_group.create_group('per_cell_line')
+                    cl_data = step_data['per_cell_line']
+                    cl_group.create_dataset('cell_line_names', data=[c.encode() for c in cl_data['cell_line_names']])
+                    cl_group.create_dataset('pearson_correlations',
+                                          data=[r if not np.isnan(r) else -999.0 for r in cl_data['pearson_correlations']])
+                    cl_group.create_dataset('p_values',
+                                          data=[p if not np.isnan(p) else -999.0 for p in cl_data['p_values']])
+                    cl_group.create_dataset('sample_counts', data=cl_data['sample_counts'])
 
 
 def parse_args():
@@ -811,7 +959,7 @@ def main():
     
     # Evaluate predictions
     print(f"\n📏 Evaluating predictions...")
-    evaluation_results = processor.evaluate_predictions(cosine_results, score_matrix_results)
+    evaluation_results = processor.evaluate_predictions(cosine_results, score_matrix_results, args.save_intermediates)
     print(f"✓ Evaluation completed")
     
     # Print results summary
