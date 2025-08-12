@@ -81,7 +81,8 @@ class BaseEvaluator:
     
     def sample_sequences_for_evaluation(self, checkpoint_path: str, config: OmegaConf, 
                                        dataloader, num_steps: int, architecture: str = 'transformer', 
-                                       show_progress: bool = False, viz_logger=None, oracle_model=None) -> Tuple[torch.Tensor, torch.Tensor]:
+                                       show_progress: bool = False, viz_logger=None, oracle_model=None, 
+                                       data_path: Optional[str] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Sample sequences for evaluation using PC sampler.
         
@@ -121,10 +122,35 @@ class BaseEvaluator:
         
         # Create special PC sampler for evaluation with visualization and oracle MSE
         if viz_logger is not None and oracle_model is not None:
+            # Get all target labels from dataloader for ground truth data
+            all_target_labels = []
+            for batch_idx, (batch, targets) in enumerate(dataloader):
+                all_target_labels.append(targets)
+            all_target_labels = torch.cat(all_target_labels, dim=0)
+            
+            # Get ground truth oracle predictions using existing method
+            if data_path is not None:
+                original_data = self.get_original_test_data(data_path)
+                ground_truth_predictions = self.get_oracle_predictions_for_viz(original_data, oracle_model)
+            else:
+                # Fallback: use zeros if no data_path provided
+                ground_truth_predictions = torch.zeros(len(all_target_labels), 1, device=self.device)
+            
+            # Update viz_logger with ground truth data
+            if hasattr(viz_logger, 'ground_truth_labels') and viz_logger.ground_truth_labels is None:
+                viz_logger.ground_truth_labels = all_target_labels.detach().cpu()
+                if len(viz_logger.ground_truth_labels.shape) == 1:
+                    viz_logger.ground_truth_labels = viz_logger.ground_truth_labels.unsqueeze(-1)
+                viz_logger.metadata['ground_truth_labels'] = viz_logger.ground_truth_labels
+                
+            if hasattr(viz_logger, 'ground_truth_predictions') and viz_logger.ground_truth_predictions is None:
+                viz_logger.ground_truth_predictions = ground_truth_predictions.detach().cpu()
+                viz_logger.metadata['ground_truth_predictions'] = viz_logger.ground_truth_predictions
+                
             # Use a custom sampling function that captures oracle MSE at each step
             sampling_fn = self._get_evaluation_pc_sampler_with_viz(
                 graph, noise, (batch_size, sequence_length), num_steps, 
-                viz_logger, oracle_model
+                viz_logger, oracle_model, ground_truth_predictions
             )
         else:
             # Regular PC sampler with optional visualization
@@ -146,9 +172,14 @@ class BaseEvaluator:
             # If last batch has different size, create new sampling function
             if current_batch_size != batch_size:
                 if viz_logger is not None and oracle_model is not None:
+                    # Get ground truth predictions for this batch size
+                    batch_start_idx = batch_idx * batch_size
+                    batch_end_idx = batch_start_idx + current_batch_size
+                    batch_ground_truth_predictions = ground_truth_predictions[batch_start_idx:batch_end_idx]
+                    
                     sampling_fn = self._get_evaluation_pc_sampler_with_viz(
                         graph, noise, (current_batch_size, sequence_length), num_steps,
-                        viz_logger, oracle_model
+                        viz_logger, oracle_model, batch_ground_truth_predictions
                     )
                 else:
                     sampling_fn = sampling.get_pc_sampler(
@@ -168,7 +199,7 @@ class BaseEvaluator:
         
         return all_samples, all_targets
     
-    def _get_evaluation_pc_sampler_with_viz(self, graph, noise, batch_dims, steps, viz_logger, oracle_model):
+    def _get_evaluation_pc_sampler_with_viz(self, graph, noise, batch_dims, steps, viz_logger, oracle_model, ground_truth_predictions=None):
         """
         Create a PC sampler that captures oracle MSE at each step during evaluation.
         
@@ -207,20 +238,21 @@ class BaseEvaluator:
                 stag_score = graph.staggered_score(score_matrix, dsigma_step)
                 prob_matrix = stag_score * graph.transp_transition(x, dsigma_step)
                 
-                # Compute oracle MSE for current sequences
+                # Compute oracle predictions and MSE for current sequences
                 oracle_mse = None
-                if oracle_model is not None:
+                current_oracle_predictions = None
+                if oracle_model is not None and ground_truth_predictions is not None:
                     try:
                         # Convert sequences to one-hot for oracle prediction
                         x_one_hot = F.one_hot(x, num_classes=4).float()
-                        oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
+                        current_oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
                         
-                        # For evaluation, we can compute MSE against ground truth activity
-                        # This is a simplified version - the exact MSE computation depends on dataset
-                        oracle_mse = oracle_predictions.pow(2).mean(dim=-1)  # Simplified MSE
+                        # Compute proper MSE against ground truth predictions
+                        oracle_mse = (ground_truth_predictions.to(self.device) - current_oracle_predictions).pow(2).mean(dim=-1)
                     except Exception as e:
                         print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
                         oracle_mse = None
+                        current_oracle_predictions = None
                 
                 # Log the step data
                 viz_logger.log_step(
@@ -231,7 +263,8 @@ class BaseEvaluator:
                     prob_matrix=prob_matrix,
                     noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
                     noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
-                    oracle_mse=oracle_mse
+                    oracle_mse=oracle_mse,
+                    oracle_predictions=current_oracle_predictions
                 )
                 
                 x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
@@ -430,7 +463,7 @@ class BaseEvaluator:
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
         sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
-            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model
+            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model, data_path
         )
         
         # Save sequences as NPZ if requested
