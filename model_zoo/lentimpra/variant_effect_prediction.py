@@ -52,6 +52,8 @@ class CAGI5VEPProcessor:
         self.config_path = config_path
         self.device = device if torch.cuda.is_available() else 'cpu'
         
+        print(f"Using device: {self.device}")
+        
         # Load configuration
         self.config = OmegaConf.load(config_path)
         
