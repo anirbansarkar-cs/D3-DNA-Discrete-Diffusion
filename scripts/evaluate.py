@@ -195,8 +195,9 @@ class BaseEvaluator:
             if oracle_model is not None:
                 try:
                     # Convert labels to one-hot format for oracle prediction
-                    # labels should be token indices, convert to one-hot
-                    labels_one_hot = F.one_hot(labels, num_classes=4).float()
+                    # labels should be token indices, convert to LongTensor first, then to one-hot
+                    labels_long = labels.long()
+                    labels_one_hot = F.one_hot(labels_long, num_classes=4).float()
                     ground_truth_oracle_predictions = self.get_oracle_predictions_for_viz(labels_one_hot, oracle_model)
                 except Exception as e:
                     print(f"Warning: Could not compute ground truth oracle predictions: {e}")
@@ -225,7 +226,8 @@ class BaseEvaluator:
                 if oracle_model is not None and ground_truth_oracle_predictions is not None:
                     try:
                         # Convert sequences to one-hot for oracle prediction
-                        x_one_hot = F.one_hot(x, num_classes=4).float()
+                        x_long = x.long()
+                        x_one_hot = F.one_hot(x_long, num_classes=4).float()
                         oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
                         
                         # Compute proper SP-MSE: (ground_truth_oracle - current_oracle)^2
@@ -338,10 +340,12 @@ class BaseEvaluator:
             original_one_hot = original_data
         else:
             # Convert from token indices to one-hot
-            original_one_hot = F.one_hot(original_data, num_classes=4).float()
+            original_long = original_data.long()
+            original_one_hot = F.one_hot(original_long, num_classes=4).float()
         
         # Convert sampled_sequences to one-hot format
-        sampled_one_hot = F.one_hot(sampled_sequences, num_classes=4).float()
+        sampled_long = sampled_sequences.long()
+        sampled_one_hot = F.one_hot(sampled_long, num_classes=4).float()
         
         # Get predictions using dataset-specific method
         val_score = self.get_oracle_predictions_for_viz(original_one_hot, oracle_model)
