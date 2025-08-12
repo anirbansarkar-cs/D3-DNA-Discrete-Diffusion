@@ -322,14 +322,14 @@ class CAGI5VEPProcessor:
                 # Create sigma tensor for batch
                 batch_sigma = sigma.repeat(ref_tokens.shape[0]).to(self.device)
                 
-                # Get score matrices using sampling score function
+                # Better approach: Use ref sequence and get scores for all nucleotides at mutation position
                 with torch.no_grad():
                     # Use None for targets (unconditional generation)
                     targets = None
                     ref_scores = sampling_score_fn(ref_tokens, batch_sigma, targets)  # (batch, 230, 4)
-                    alt_scores = sampling_score_fn(alt_tokens, batch_sigma, targets)  # (batch, 230, 4)
                     
-                    # Extract scores at mutation positions
+                    # Instead of using different sequences, use the scores from ref sequence
+                    # and compare the scores for ref vs alt nucleotides at the mutation position
                     batch_ref_mut_scores = []
                     batch_alt_mut_scores = []
                     batch_score_diffs = []
@@ -339,14 +339,17 @@ class CAGI5VEPProcessor:
                         ref_nuc = ref_nuc_batch[i].item()
                         alt_nuc = alt_nuc_batch[i].item()
                         
-                        # Get scores at mutation position
+                        # Get scores at mutation position from the ref sequence score matrix
                         ref_mut_score = ref_scores[i, mut_pos, ref_nuc].item()
-                        alt_mut_score = alt_scores[i, mut_pos, alt_nuc].item()
+                        alt_mut_score = ref_scores[i, mut_pos, alt_nuc].item()  # Use same score matrix
                         score_diff = alt_mut_score - ref_mut_score
                         
                         batch_ref_mut_scores.append(ref_mut_score)
                         batch_alt_mut_scores.append(alt_mut_score)
                         batch_score_diffs.append(score_diff)
+                    
+                    # For storage, we'll duplicate the ref_scores as alt_scores to maintain compatibility
+                    alt_scores = ref_scores.clone()
                     
                 step_results['ref_score_matrices'].append(ref_scores.cpu())
                 step_results['alt_score_matrices'].append(alt_scores.cpu())
