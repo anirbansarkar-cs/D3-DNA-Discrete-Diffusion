@@ -257,13 +257,6 @@ class CAGI5VEPProcessor:
             step_results['alt_representations'] = torch.cat(step_results['alt_representations'], dim=0)
             step_results['cosine_scores'] = torch.cat(step_results['cosine_scores'], dim=0)
             
-            # Debug: Print some statistics about the cosine scores
-            if step_idx == default_sigma_idx:
-                print(f"\nCosine similarity statistics for default step (sigma={sigma:.4f}):")
-                print(f"  Cosine scores: min={step_results['cosine_scores'].min():.6f}, max={step_results['cosine_scores'].max():.6f}")
-                print(f"  Cosine scores: mean={step_results['cosine_scores'].mean():.6f}, std={step_results['cosine_scores'].std():.6f}")
-                print(f"  Number of unique cosine scores: {len(torch.unique(step_results['cosine_scores']))}")
-            
             # Store results
             if step_idx == default_sigma_idx:
                 results['default_step'] = step_results
@@ -289,8 +282,7 @@ class CAGI5VEPProcessor:
         print("Computing score matrix predictions...")
         
         n_sequences = len(self.ref_sequences)
-        # Try both sampling=True (probabilities) and sampling=False (log scores) to see which works better
-        sampling_score_fn = get_score_fn(self.model, train=False, sampling=False)  # Use log scores instead of probabilities
+        sampling_score_fn = get_score_fn(self.model, train=False, sampling=True)  # Use sampling=True for score matrices
         
         results = {
             'default_step': {},
@@ -332,14 +324,14 @@ class CAGI5VEPProcessor:
                 # Create sigma tensor for batch
                 batch_sigma = sigma.repeat(ref_tokens.shape[0]).to(self.device)
                 
-                # Better approach: Use ref sequence and get scores for all nucleotides at mutation position
+                # Get score matrices using sampling score function
                 with torch.no_grad():
                     # Use None for targets (unconditional generation)
                     targets = None
                     ref_scores = sampling_score_fn(ref_tokens, batch_sigma, targets)  # (batch, 230, 4)
+                    alt_scores = sampling_score_fn(alt_tokens, batch_sigma, targets)  # (batch, 230, 4)
                     
-                    # Instead of using different sequences, use the scores from ref sequence
-                    # and compare the scores for ref vs alt nucleotides at the mutation position
+                    # Extract scores at mutation positions
                     batch_ref_mut_scores = []
                     batch_alt_mut_scores = []
                     batch_score_diffs = []
@@ -349,23 +341,14 @@ class CAGI5VEPProcessor:
                         ref_nuc = ref_nuc_batch[i].item()
                         alt_nuc = alt_nuc_batch[i].item()
                         
-                        # Get scores at mutation position from the ref sequence score matrix
+                        # Get scores at mutation position
                         ref_mut_score = ref_scores[i, mut_pos, ref_nuc].item()
-                        alt_mut_score = ref_scores[i, mut_pos, alt_nuc].item()  # Use same score matrix
+                        alt_mut_score = alt_scores[i, mut_pos, alt_nuc].item()
                         score_diff = alt_mut_score - ref_mut_score
-                        
-                        # Debug: Print some values to understand what we're getting
-                        if batch_start + i < 5:  # Only print first 5 samples
-                            print(f"Sample {batch_start + i}: pos={mut_pos}, ref_nuc={ref_nuc}, alt_nuc={alt_nuc}")
-                            print(f"  ref_score={ref_mut_score:.6f}, alt_score={alt_mut_score:.6f}, diff={score_diff:.6f}")
-                            print(f"  scores_at_pos: {ref_scores[i, mut_pos, :].tolist()}")
                         
                         batch_ref_mut_scores.append(ref_mut_score)
                         batch_alt_mut_scores.append(alt_mut_score)
                         batch_score_diffs.append(score_diff)
-                    
-                    # For storage, we'll duplicate the ref_scores as alt_scores to maintain compatibility
-                    alt_scores = ref_scores.clone()
                     
                 step_results['ref_score_matrices'].append(ref_scores.cpu())
                 step_results['alt_score_matrices'].append(alt_scores.cpu())
@@ -379,13 +362,6 @@ class CAGI5VEPProcessor:
             step_results['ref_mutation_scores'] = torch.tensor(step_results['ref_mutation_scores'])
             step_results['alt_mutation_scores'] = torch.tensor(step_results['alt_mutation_scores'])
             step_results['score_differences'] = torch.tensor(step_results['score_differences'])
-            
-            # Debug: Print some statistics about the score differences
-            if step_idx == default_sigma_idx:
-                print(f"\nScore matrix statistics for default step (sigma={sigma:.4f}):")
-                print(f"  Score differences: min={step_results['score_differences'].min():.6f}, max={step_results['score_differences'].max():.6f}")
-                print(f"  Score differences: mean={step_results['score_differences'].mean():.6f}, std={step_results['score_differences'].std():.6f}")
-                print(f"  Number of unique differences: {len(torch.unique(step_results['score_differences']))}")
             
             # Store results
             if step_idx == default_sigma_idx:
@@ -611,9 +587,9 @@ class CAGI5VEPProcessor:
         # Default step
         default_data = cosine_results['default_step']
         default_group = cosine_group.create_group('default_step')
-        default_group.create_dataset('ref_representations', data=default_data['ref_representations'].numpy())
-        default_group.create_dataset('alt_representations', data=default_data['alt_representations'].numpy())
-        default_group.create_dataset('cosine_scores', data=default_data['cosine_scores'].numpy())
+        default_group.create_dataset('ref_representations', data=default_data['ref_representations'].float().numpy())
+        default_group.create_dataset('alt_representations', data=default_data['alt_representations'].float().numpy())
+        default_group.create_dataset('cosine_scores', data=default_data['cosine_scores'].float().numpy())
         default_group.create_dataset('noise_level', data=default_data['noise_level'])
         
         # All steps (if available)
@@ -621,9 +597,9 @@ class CAGI5VEPProcessor:
             all_steps_group = cosine_group.create_group('all_steps')
             for step_name, step_data in cosine_results['all_steps'].items():
                 step_group = all_steps_group.create_group(step_name)
-                step_group.create_dataset('ref_representations', data=step_data['ref_representations'].numpy())
-                step_group.create_dataset('alt_representations', data=step_data['alt_representations'].numpy())
-                step_group.create_dataset('cosine_scores', data=step_data['cosine_scores'].numpy())
+                step_group.create_dataset('ref_representations', data=step_data['ref_representations'].float().numpy())
+                step_group.create_dataset('alt_representations', data=step_data['alt_representations'].float().numpy())
+                step_group.create_dataset('cosine_scores', data=step_data['cosine_scores'].float().numpy())
                 step_group.create_dataset('noise_level', data=step_data['noise_level'])
     
     def _save_score_matrix_results_h5(self, f: h5py.File, score_matrix_results: Dict):
@@ -633,11 +609,11 @@ class CAGI5VEPProcessor:
         # Default step
         default_data = score_matrix_results['default_step']
         default_group = score_group.create_group('default_step')
-        default_group.create_dataset('ref_score_matrices', data=default_data['ref_score_matrices'].numpy())
-        default_group.create_dataset('alt_score_matrices', data=default_data['alt_score_matrices'].numpy())
-        default_group.create_dataset('ref_mutation_scores', data=default_data['ref_mutation_scores'].numpy())
-        default_group.create_dataset('alt_mutation_scores', data=default_data['alt_mutation_scores'].numpy())
-        default_group.create_dataset('score_differences', data=default_data['score_differences'].numpy())
+        default_group.create_dataset('ref_score_matrices', data=default_data['ref_score_matrices'].float().numpy())
+        default_group.create_dataset('alt_score_matrices', data=default_data['alt_score_matrices'].float().numpy())
+        default_group.create_dataset('ref_mutation_scores', data=default_data['ref_mutation_scores'].float().numpy())
+        default_group.create_dataset('alt_mutation_scores', data=default_data['alt_mutation_scores'].float().numpy())
+        default_group.create_dataset('score_differences', data=default_data['score_differences'].float().numpy())
         default_group.create_dataset('noise_level', data=default_data['noise_level'])
         
         # All steps (if available)
@@ -645,11 +621,11 @@ class CAGI5VEPProcessor:
             all_steps_group = score_group.create_group('all_steps')
             for step_name, step_data in score_matrix_results['all_steps'].items():
                 step_group = all_steps_group.create_group(step_name)
-                step_group.create_dataset('ref_score_matrices', data=step_data['ref_score_matrices'].numpy())
-                step_group.create_dataset('alt_score_matrices', data=step_data['alt_score_matrices'].numpy())
-                step_group.create_dataset('ref_mutation_scores', data=step_data['ref_mutation_scores'].numpy())
-                step_group.create_dataset('alt_mutation_scores', data=step_data['alt_mutation_scores'].numpy())
-                step_group.create_dataset('score_differences', data=step_data['score_differences'].numpy())
+                step_group.create_dataset('ref_score_matrices', data=step_data['ref_score_matrices'].float().numpy())
+                step_group.create_dataset('alt_score_matrices', data=step_data['alt_score_matrices'].float().numpy())
+                step_group.create_dataset('ref_mutation_scores', data=step_data['ref_mutation_scores'].float().numpy())
+                step_group.create_dataset('alt_mutation_scores', data=step_data['alt_mutation_scores'].float().numpy())
+                step_group.create_dataset('score_differences', data=step_data['score_differences'].float().numpy())
                 step_group.create_dataset('noise_level', data=step_data['noise_level'])
     
     def _save_evaluation_results_h5(self, f: h5py.File, evaluation_results: Dict):
