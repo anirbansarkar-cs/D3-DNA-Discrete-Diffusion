@@ -654,7 +654,7 @@ class CAGI5VEPProcessor:
                 try:
                     gene_idx = gene_names.index(gene)
                     if not np.isnan(gene_correlations[gene_idx]):
-                        hepg2_correlations.append(gene_correlations[gene_idx])
+                        hepg2_correlations.append(abs(gene_correlations[gene_idx])) # take absolute value of correlation
                 except (ValueError, IndexError):
                     continue
             
