@@ -199,6 +199,12 @@ class BaseEvaluator:
                     labels_long = labels.long()
                     labels_one_hot = F.one_hot(labels_long, num_classes=4).float()
                     ground_truth_oracle_predictions = self.get_oracle_predictions_for_viz(labels_one_hot, oracle_model)
+                    
+                    # Store ground truth labels and oracle predictions in metadata (only once)
+                    if viz_logger is not None:
+                        viz_logger.metadata['ground_truth_labels'] = labels.detach().cpu()
+                        viz_logger.metadata['ground_truth_oracle_predictions'] = ground_truth_oracle_predictions.detach().cpu()
+                        
                 except Exception as e:
                     print(f"Warning: Could not compute ground truth oracle predictions: {e}")
                     ground_truth_oracle_predictions = None
@@ -230,8 +236,11 @@ class BaseEvaluator:
                         x_one_hot = F.one_hot(x_long, num_classes=4).float()
                         oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
                         
+                        # Ensure both tensors are on the same device for SP-MSE computation
+                        ground_truth_oracle_predictions_device = ground_truth_oracle_predictions.to(oracle_predictions.device)
+                        
                         # Compute proper SP-MSE: (ground_truth_oracle - current_oracle)^2
-                        sp_mse = (ground_truth_oracle_predictions - oracle_predictions) ** 2
+                        sp_mse = (ground_truth_oracle_predictions_device - oracle_predictions) ** 2
                         oracle_mse = sp_mse.mean(dim=-1)  # Average across output dimensions
                     except Exception as e:
                         print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
@@ -248,13 +257,8 @@ class BaseEvaluator:
                     noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
                     noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
                     oracle_mse=oracle_mse,
-                    ground_truth_labels=labels,
                     oracle_predictions=oracle_predictions
                 )
-                
-                # Store ground truth oracle predictions in metadata (only once, at step 0)
-                if ground_truth_oracle_predictions is not None:
-                    viz_logger.metadata['ground_truth_oracle_predictions'] = ground_truth_oracle_predictions.detach().cpu()
                 
                 x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
 

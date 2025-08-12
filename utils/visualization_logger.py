@@ -89,7 +89,6 @@ class VisualizationDataLogger:
                  noise_level: float,
                  noise_rate: Optional[float] = None,
                  oracle_mse: Optional[torch.Tensor] = None,
-                 ground_truth_labels: Optional[torch.Tensor] = None,
                  oracle_predictions: Optional[torch.Tensor] = None):
         """
         Log data for a single sampling step.
@@ -103,7 +102,6 @@ class VisualizationDataLogger:
             noise_level: Current noise level (sigma)
             noise_rate: Rate of noise change (dsigma), optional
             oracle_mse: Oracle MSE predictions (batch_size,), optional
-            ground_truth_labels: Ground truth labels for the current batch (batch_size,), optional
             oracle_predictions: Oracle model predictions for current sequences (batch_size,), optional
         """
         # Convert tensors to CPU and detach for storage
@@ -142,9 +140,6 @@ class VisualizationDataLogger:
             step_entry['oracle_mse'] = oracle_mse.detach().cpu()
         
         # Add ground truth labels and oracle predictions if provided
-        if ground_truth_labels is not None:
-            step_entry['ground_truth_labels'] = ground_truth_labels.detach().cpu()
-        
         if oracle_predictions is not None and self.save_oracle_mse:
             step_entry['oracle_predictions'] = oracle_predictions.detach().cpu()
         
@@ -182,6 +177,9 @@ class VisualizationDataLogger:
                 elif key == 'ground_truth_oracle_predictions' and value is not None:
                     # Save ground truth oracle predictions as dataset in metadata
                     metadata_group.create_dataset('ground_truth_oracle_predictions', data=value.numpy())
+                elif key == 'ground_truth_labels' and value is not None:
+                    # Save ground truth labels as dataset in metadata
+                    metadata_group.create_dataset('ground_truth_labels', data=value.numpy())
                 elif value is not None:
                     metadata_group.attrs[key] = value
             
@@ -253,6 +251,9 @@ class VisualizationDataLogger:
             elif key == 'ground_truth_oracle_predictions' and value is not None:
                 # Save ground truth oracle predictions directly (not as meta_ prefix)
                 save_dict['ground_truth_oracle_predictions'] = value.numpy()
+            elif key == 'ground_truth_labels' and value is not None:
+                # Save ground truth labels directly (not as meta_ prefix)
+                save_dict['ground_truth_labels'] = value.numpy()
             else:
                 save_dict[f'meta_{key}'] = value
         
