@@ -345,7 +345,7 @@ class CAGI5VEPProcessor:
                 'alt_score_matrices': [],
                 'ref_mutation_scores': [],
                 'alt_mutation_scores': [],
-                'score_differences': [],
+                'score_differences': [],  # Note: Now stores alt_nuc scores directly (not differences)
                 'noise_level': sigma.item()
             }
             
@@ -385,11 +385,12 @@ class CAGI5VEPProcessor:
                         # Get scores at mutation position from the ref sequence score matrix
                         ref_mut_score = ref_scores[i, mut_pos, ref_nuc].item()
                         alt_mut_score = ref_scores[i, mut_pos, alt_nuc].item()  # Use same score matrix
-                        score_diff = alt_mut_score - ref_mut_score
+                        # score_diff = alt_mut_score - ref_mut_score  # Commented out - using alt_nuc score only
                         
                         batch_ref_mut_scores.append(ref_mut_score)
                         batch_alt_mut_scores.append(alt_mut_score)
-                        batch_score_diffs.append(score_diff)
+                        # Use alt_nuc score directly instead of difference
+                        batch_score_diffs.append(alt_mut_score)
                     
                     # For storage, we'll duplicate the ref_scores as alt_scores to maintain compatibility
                     alt_scores = ref_scores.clone()
@@ -753,7 +754,9 @@ class CAGI5VEPProcessor:
         # All steps (if available)
         if cosine_results['all_steps'] is not None:
             all_steps_group = cosine_group.create_group('all_steps')
-            for step_name, step_data in cosine_results['all_steps'].items():
+            # Sort steps by step index to ensure proper ordering
+            sorted_steps = sorted(cosine_results['all_steps'].items(), key=lambda x: int(x[0].split('_')[1]))
+            for step_name, step_data in sorted_steps:
                 step_group = all_steps_group.create_group(step_name)
                 step_group.create_dataset('ref_representations', data=step_data['ref_representations'].float().numpy())
                 step_group.create_dataset('alt_representations', data=step_data['alt_representations'].float().numpy())
@@ -777,7 +780,9 @@ class CAGI5VEPProcessor:
         # All steps (if available)
         if score_matrix_results['all_steps'] is not None:
             all_steps_group = score_group.create_group('all_steps')
-            for step_name, step_data in score_matrix_results['all_steps'].items():
+            # Sort steps by step index to ensure proper ordering
+            sorted_steps = sorted(score_matrix_results['all_steps'].items(), key=lambda x: int(x[0].split('_')[1]))
+            for step_name, step_data in sorted_steps:
                 step_group = all_steps_group.create_group(step_name)
                 step_group.create_dataset('ref_score_matrices', data=step_data['ref_score_matrices'].float().numpy())
                 step_group.create_dataset('alt_score_matrices', data=step_data['alt_score_matrices'].float().numpy())
@@ -826,7 +831,9 @@ class CAGI5VEPProcessor:
             all_steps_group = eval_group.create_group('all_steps_metrics')
             for method_name, method_data in evaluation_results['all_steps_metrics'].items():
                 method_group = all_steps_group.create_group(method_name)
-                for step_name, step_data in method_data.items():
+                # Sort steps by step index to ensure proper ordering
+                sorted_steps = sorted(method_data.items(), key=lambda x: int(x[0].split('_')[1]))
+                for step_name, step_data in sorted_steps:
                     step_group = method_group.create_group(step_name)
                     
                     # Save noise level
