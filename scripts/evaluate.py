@@ -132,7 +132,13 @@ class BaseEvaluator:
             # Get ground truth oracle predictions using existing method
             if data_path is not None:
                 original_data = self.get_original_test_data(data_path)
-                ground_truth_predictions = self.get_oracle_predictions_for_viz(original_data, oracle_model)
+                # Convert original_data to the format expected by get_oracle_predictions_for_viz
+                # Most datasets store as (batch, channels, length) but get_oracle_predictions_for_viz expects (batch, length, channels)
+                if len(original_data.shape) == 3 and original_data.shape[1] == 4:  # (batch, 4, length)
+                    original_data_for_viz = original_data.permute(0, 2, 1)  # -> (batch, length, 4)
+                else:
+                    original_data_for_viz = original_data  # Already in correct format
+                ground_truth_predictions = self.get_oracle_predictions_for_viz(original_data_for_viz, oracle_model)
             else:
                 # Fallback: use zeros if no data_path provided
                 ground_truth_predictions = torch.zeros(len(all_target_labels), 1, device=self.device)
