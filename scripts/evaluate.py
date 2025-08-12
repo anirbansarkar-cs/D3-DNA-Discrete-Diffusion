@@ -190,6 +190,18 @@ class BaseEvaluator:
             timesteps = torch.linspace(1, eps, steps + 1, device=self.device)
             dt = (1 - eps) / steps
 
+            # Get ground truth oracle predictions once (for SP-MSE computation)
+            ground_truth_oracle_predictions = None
+            if oracle_model is not None:
+                try:
+                    # Convert labels to one-hot format for oracle prediction
+                    # labels should be token indices, convert to one-hot
+                    labels_one_hot = F.one_hot(labels, num_classes=4).float()
+                    ground_truth_oracle_predictions = self.get_oracle_predictions_for_viz(labels_one_hot, oracle_model)
+                except Exception as e:
+                    print(f"Warning: Could not compute ground truth oracle predictions: {e}")
+                    ground_truth_oracle_predictions = None
+
             for i in range(steps):
                 t = timesteps[i] * torch.ones(x.shape[0], 1, device=self.device)
                 
@@ -207,20 +219,22 @@ class BaseEvaluator:
                 stag_score = graph.staggered_score(score_matrix, dsigma_step)
                 prob_matrix = stag_score * graph.transp_transition(x, dsigma_step)
                 
-                # Compute oracle MSE for current sequences
+                # Compute oracle predictions and SP-MSE for current sequences
                 oracle_mse = None
-                if oracle_model is not None:
+                oracle_predictions = None
+                if oracle_model is not None and ground_truth_oracle_predictions is not None:
                     try:
                         # Convert sequences to one-hot for oracle prediction
                         x_one_hot = F.one_hot(x, num_classes=4).float()
                         oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
                         
-                        # For evaluation, we can compute MSE against ground truth activity
-                        # This is a simplified version - the exact MSE computation depends on dataset
-                        oracle_mse = oracle_predictions.pow(2).mean(dim=-1)  # Simplified MSE
+                        # Compute proper SP-MSE: (ground_truth_oracle - current_oracle)^2
+                        sp_mse = (ground_truth_oracle_predictions - oracle_predictions) ** 2
+                        oracle_mse = sp_mse.mean(dim=-1)  # Average across output dimensions
                     except Exception as e:
                         print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
                         oracle_mse = None
+                        oracle_predictions = None
                 
                 # Log the step data
                 viz_logger.log_step(
@@ -231,8 +245,14 @@ class BaseEvaluator:
                     prob_matrix=prob_matrix,
                     noise_level=sigma.mean().item() if sigma.numel() > 1 else sigma.item(),
                     noise_rate=dsigma.mean().item() if dsigma.numel() > 1 else dsigma.item(),
-                    oracle_mse=oracle_mse
+                    oracle_mse=oracle_mse,
+                    ground_truth_labels=labels,
+                    oracle_predictions=oracle_predictions
                 )
+                
+                # Store ground truth oracle predictions in metadata (only once, at step 0)
+                if ground_truth_oracle_predictions is not None:
+                    viz_logger.metadata['ground_truth_oracle_predictions'] = ground_truth_oracle_predictions.detach().cpu()
                 
                 x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
 
@@ -311,9 +331,21 @@ class BaseEvaluator:
             print(f"  ⚠️  Warning: Original data has {original_data.shape[0]} samples but sampled {num_samples}. Using first {num_samples} for SP-MSE.")
             original_data = original_data[:num_samples]
         
-        # Get oracle predictions for original and generated data
-        val_score = oracle_model.predict_custom(original_data.to(self.device))
-        val_pred_score = oracle_model.predict_custom(sampled_sequences.permute(0, 2, 1).to(self.device))
+        # Get oracle predictions for original and generated data using dataset-specific method
+        # Convert original_data to one-hot format if it's not already
+        if len(original_data.shape) == 3 and original_data.shape[1] == 4:
+            # Already in one-hot format
+            original_one_hot = original_data
+        else:
+            # Convert from token indices to one-hot
+            original_one_hot = F.one_hot(original_data, num_classes=4).float()
+        
+        # Convert sampled_sequences to one-hot format
+        sampled_one_hot = F.one_hot(sampled_sequences, num_classes=4).float()
+        
+        # Get predictions using dataset-specific method
+        val_score = self.get_oracle_predictions_for_viz(original_one_hot, oracle_model)
+        val_pred_score = self.get_oracle_predictions_for_viz(sampled_one_hot, oracle_model)
         
         # Compute SP-MSE
         sp_mse = (val_score - val_pred_score) ** 2

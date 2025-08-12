@@ -88,7 +88,9 @@ class VisualizationDataLogger:
                  prob_matrix: torch.Tensor,
                  noise_level: float,
                  noise_rate: Optional[float] = None,
-                 oracle_mse: Optional[torch.Tensor] = None):
+                 oracle_mse: Optional[torch.Tensor] = None,
+                 ground_truth_labels: Optional[torch.Tensor] = None,
+                 oracle_predictions: Optional[torch.Tensor] = None):
         """
         Log data for a single sampling step.
         
@@ -101,6 +103,8 @@ class VisualizationDataLogger:
             noise_level: Current noise level (sigma)
             noise_rate: Rate of noise change (dsigma), optional
             oracle_mse: Oracle MSE predictions (batch_size,), optional
+            ground_truth_labels: Ground truth labels for the current batch (batch_size,), optional
+            oracle_predictions: Oracle model predictions for current sequences (batch_size,), optional
         """
         # Convert tensors to CPU and detach for storage
         sequences_cpu = sequences.detach().cpu()
@@ -137,6 +141,13 @@ class VisualizationDataLogger:
         if oracle_mse is not None and self.save_oracle_mse:
             step_entry['oracle_mse'] = oracle_mse.detach().cpu()
         
+        # Add ground truth labels and oracle predictions if provided
+        if ground_truth_labels is not None:
+            step_entry['ground_truth_labels'] = ground_truth_labels.detach().cpu()
+        
+        if oracle_predictions is not None and self.save_oracle_mse:
+            step_entry['oracle_predictions'] = oracle_predictions.detach().cpu()
+        
         self.step_data.append(step_entry)
         
         if step % 50 == 0:  # Print progress every 50 steps
@@ -168,6 +179,9 @@ class VisualizationDataLogger:
                 elif key == 'original_samples' and value is not None:
                     # Save original samples as dataset in metadata
                     metadata_group.create_dataset('original_samples', data=value.numpy())
+                elif key == 'ground_truth_oracle_predictions' and value is not None:
+                    # Save ground truth oracle predictions as dataset in metadata
+                    metadata_group.create_dataset('ground_truth_oracle_predictions', data=value.numpy())
                 elif value is not None:
                     metadata_group.attrs[key] = value
             
@@ -203,6 +217,14 @@ class VisualizationDataLogger:
                 # Save oracle MSE if available
                 if 'oracle_mse' in step_entry:
                     step_group.create_dataset('oracle_mse', data=step_entry['oracle_mse'].numpy())
+                
+                # Save ground truth labels if available
+                if 'ground_truth_labels' in step_entry:
+                    step_group.create_dataset('ground_truth_labels', data=step_entry['ground_truth_labels'].numpy())
+                
+                # Save oracle predictions if available
+                if 'oracle_predictions' in step_entry:
+                    step_group.create_dataset('oracle_predictions', data=step_entry['oracle_predictions'].numpy())
         
         print(f"✓ Visualization data saved to: {filepath}")
         print(f"  ↳ {len(self.step_data)} steps, {self.num_samples} samples")
@@ -228,6 +250,9 @@ class VisualizationDataLogger:
             elif key == 'original_samples' and value is not None:
                 # Save original samples directly (not as meta_ prefix)
                 save_dict['original_samples'] = value.numpy()
+            elif key == 'ground_truth_oracle_predictions' and value is not None:
+                # Save ground truth oracle predictions directly (not as meta_ prefix)
+                save_dict['ground_truth_oracle_predictions'] = value.numpy()
             else:
                 save_dict[f'meta_{key}'] = value
         
@@ -261,6 +286,16 @@ class VisualizationDataLogger:
             if self.save_oracle_mse and 'oracle_mse' in self.step_data[0]:
                 oracle_mses = torch.stack([entry['oracle_mse'] for entry in self.step_data], dim=0)
                 save_dict['oracle_mses'] = oracle_mses.numpy()  # Shape: (num_steps, batch_size)
+            
+            # Stack ground truth labels if available
+            if 'ground_truth_labels' in self.step_data[0]:
+                ground_truth_labels = torch.stack([entry['ground_truth_labels'] for entry in self.step_data], dim=0)
+                save_dict['ground_truth_labels'] = ground_truth_labels.numpy()  # Shape: (num_steps, batch_size)
+            
+            # Stack oracle predictions if available
+            if self.save_oracle_mse and 'oracle_predictions' in self.step_data[0]:
+                oracle_predictions = torch.stack([entry['oracle_predictions'] for entry in self.step_data], dim=0)
+                save_dict['oracle_predictions'] = oracle_predictions.numpy()  # Shape: (num_steps, batch_size)
             
             # Original samples already added in metadata section above
         
