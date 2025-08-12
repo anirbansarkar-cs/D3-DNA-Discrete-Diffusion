@@ -248,7 +248,9 @@ class BaseEvaluator:
                         current_oracle_predictions = self.get_oracle_predictions_for_viz(x_one_hot, oracle_model)
                         
                         # Compute proper MSE against ground truth predictions
-                        oracle_mse = (ground_truth_predictions.to(self.device) - current_oracle_predictions).pow(2).mean(dim=-1)
+                        # Ensure both tensors are on the same device
+                        gt_preds_device = ground_truth_predictions.to(current_oracle_predictions.device)
+                        oracle_mse = (gt_preds_device - current_oracle_predictions).pow(2).mean(dim=-1)
                     except Exception as e:
                         print(f"Warning: Could not compute oracle MSE at step {i}: {e}")
                         oracle_mse = None
