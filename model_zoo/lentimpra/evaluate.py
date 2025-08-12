@@ -274,7 +274,7 @@ class LentIMPRAEvaluator(BaseEvaluator):
         # Sample sequences using PC sampler
         print(f"Sampling sequences with PC sampler ({steps} steps)...")
         sampled_sequences, target_labels = self.sample_sequences_for_evaluation(
-            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model
+            checkpoint_path, config, dataloader, steps, architecture, show_progress, viz_logger, oracle_model, data_path
         )
         
         # Save sequences as NPZ if requested
