@@ -224,14 +224,16 @@ class DeepSTARRScoreMatrixGenerator:
                 
                 # Get batch sequences
                 seq_batch = self.sequences[batch_start:batch_end].to(self.device)
-                label_batch = self.labels[batch_start:batch_end].to(self.device)
+                # label_batch = self.labels[batch_start:batch_end].to(self.device)
                 
                 # Create sigma tensor for batch
                 batch_sigma = sigma.repeat(seq_batch.shape[0]).to(self.device)
                 
                 # Generate score matrices
                 with torch.no_grad():
-                    score_matrix = sampling_score_fn(seq_batch, batch_sigma, label_batch)  # (batch, seq_len, 4)
+                    # Use None for targets (unconditional generation)
+                    targets = None
+                    score_matrix = sampling_score_fn(seq_batch, batch_sigma, targets)  # (batch, seq_len, 4)
                     
                 step_results['sequences'].append(seq_batch.cpu())
                 step_results['score_matrices'].append(score_matrix.cpu().to(torch.float16))
