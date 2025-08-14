@@ -216,7 +216,7 @@ class CAGI5VEPProcessor:
         sigma_values = torch.tensor(sigma_values, device=self.device)
         
         # Use 5th to last sigma as default (or last if less than 5 steps)
-        default_idx = max(0, len(sigma_values) -26)
+        default_idx = max(0, len(sigma_values) - 5)
         
         return sigma_values, default_idx
         
