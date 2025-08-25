@@ -14,7 +14,7 @@ tokens: 4
 training:
   batch_size: 256
   accum: 1
-  max_epochs: 500
+  max_epochs: 300
   checkpoint_every_n_epochs: 10
   log_freq: 50
   val_every_n_epochs: 4
@@ -24,8 +24,8 @@ training:
 
 # Data configuration
 data:
-  train: deepstarr
-  valid: deepstarr
+  train: atacseq
+  valid: atacseq
   cache_dir: data
 
 # Graph configuration
@@ -91,7 +91,7 @@ model:
 wandb:
   enabled: true
   project: d3-transfer-learn
-  name: deepstarr-tran-fine-tune
+  name: deepstarr-pretrain
   entity: d3-cshl
   tags: []
   notes: ""
