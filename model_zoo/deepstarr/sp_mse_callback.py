@@ -58,12 +58,11 @@ class DeepSTARRSPMSECallback(BaseSPMSEValidationCallback):
         # Convert to one-hot if needed
         if sequences.dtype == torch.long:
             sequences_one_hot = F.one_hot(sequences, num_classes=4).float()
+            # For standard training: convert from (batch_size, length, channels) to (batch_size, channels, length)
+            sequences_input = sequences_one_hot.permute(0, 2, 1).to(device)
         else:
-            sequences_one_hot = sequences
-        
-        # DeepSTARR expects input as (batch_size, channels, length)
-        # Convert from (batch_size, length, channels) to (batch_size, channels, length)
-        sequences_input = sequences_one_hot.permute(0, 2, 1).to(device)
+            # For EvoAug training: data is already in (batch_size, channels, length) format
+            sequences_input = sequences.to(device)
         
         # Get oracle predictions
         with torch.no_grad():
