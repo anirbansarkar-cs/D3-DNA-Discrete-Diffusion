@@ -51,7 +51,6 @@ eval:
   batch_size: 256
   perplexity: false
   perplexity_batch_size: 32
-  use_evoaug_oracle: false  # Set to true to use EvoAug-trained oracle model
 
 # SP-MSE validation configuration
 sp_mse_validation:
