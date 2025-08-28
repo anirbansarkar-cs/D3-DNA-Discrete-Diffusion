@@ -43,7 +43,7 @@ class DeepSTARRLightningModule(BaseD3LightningModule):
             inputs, targets = batch
             
             # Handle EvoAug one-hot encoded data: convert (batch_size, 4, seq_length) to (batch_size, seq_length)
-            if len(inputs.shape) == 3 and inputs.shape[1] == 4:
+            if len(inputs.shape) == 3:
                 # Convert one-hot to indices: (batch_size, 4, seq_length) -> (batch_size, seq_length)
                 inputs = torch.argmax(inputs, dim=1)
             

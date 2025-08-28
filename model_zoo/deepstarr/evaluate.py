@@ -135,7 +135,7 @@ class DeepSTARREvaluator(BaseEvaluator):
             npz_path = os.path.join(checkpoint_dir, "sample.npz")
             self.save_sequences_as_npz(sampled_sequences, npz_path)
         
-        # Load oracle model with EvoAug flag from config
+        # Load oracle model
         print("Loading oracle model for SP-MSE evaluation...")
         oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
         

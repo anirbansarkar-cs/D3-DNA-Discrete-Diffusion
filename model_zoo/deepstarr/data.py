@@ -249,6 +249,7 @@ def get_deepstarr_dataloaders(config, distributed: bool = True) -> Tuple[DataLoa
 def get_deepstarr_evoaug_dataloaders(config, distributed: bool = True) -> Tuple[DataLoader, DataLoader]:
     """
     Get DeepSTARR EvoAug dataloaders for training and validation.
+    Validations are disabled for the validation set.
     
     Args:
         config: Configuration object with training parameters
