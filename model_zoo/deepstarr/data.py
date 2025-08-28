@@ -123,8 +123,6 @@ class DeepSTARREvoAugDataset(Dataset):
                 raise ValueError(f"Unknown split: {self.split}")
             
             # Keep one-hot format for EvoAug (X shape: n_samples, 4, seq_length)
-            # BUT switch the last two dimensions from (n_samples, 4, seq_length) to (n_samples, seq_length, 4)
-            X = X.permute(0, 2, 1)
             
         return X, y
     

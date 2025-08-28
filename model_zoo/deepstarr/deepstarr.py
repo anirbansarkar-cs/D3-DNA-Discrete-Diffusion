@@ -402,6 +402,7 @@ class PL_DeepSTARR(pl.LightningModule):
 # EvoAug Integration
 # =============================================================================
 
+#NOTE: depracated
 def create_evoaug_augmentation_list():
     """Create augmentation list with specified hyperparameters for DeepSTARR."""
     try:
@@ -411,7 +412,7 @@ def create_evoaug_augmentation_list():
         return []
     
     augment_list = [
-        augment.RandomMutation(mutate_frac=0.05),
+        augment.RandomMutation(mut_frac=0.05),
         augment.RandomTranslocation(shift_min=0, shift_max=20),
         augment.RandomInsertion(insert_min=0, insert_max=20),
         augment.RandomDeletion(delete_min=0, delete_max=30),
@@ -421,7 +422,7 @@ def create_evoaug_augmentation_list():
     
     return augment_list
 
-
+#NOTE: depracated
 def load_evoaug_oracle_model(oracle_path: str, device: str = 'cuda') -> DeepSTARR:
     """
     Load EvoAug oracle model from checkpoint.
