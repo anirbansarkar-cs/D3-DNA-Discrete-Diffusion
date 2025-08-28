@@ -68,8 +68,8 @@ class DeepSTARREvaluator(BaseEvaluator):
             pin_memory=True
         )
     
-    def load_oracle_model(self, oracle_checkpoint: str, data_path: str, use_evoaug_oracle: bool = False):
-        """Load DeepSTARR oracle model (EvoAug or standard)."""
+    def load_oracle_model(self, oracle_checkpoint: str, data_path: str):
+        """Load DeepSTARR oracle model."""
         try:
             import os
             # Check if data_path is empty, a directory, or doesn't exist
