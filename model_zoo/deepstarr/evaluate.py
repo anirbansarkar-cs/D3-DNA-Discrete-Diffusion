@@ -68,8 +68,8 @@ class DeepSTARREvaluator(BaseEvaluator):
             pin_memory=True
         )
     
-    def load_oracle_model(self, oracle_checkpoint: str, data_path: str, use_evoaug_oracle: bool = False):
-        """Load DeepSTARR oracle model (EvoAug or standard)."""
+    def load_oracle_model(self, oracle_checkpoint: str, data_path: str):
+        """Load DeepSTARR oracle model."""
         try:
             import os
             # Check if data_path is empty, a directory, or doesn't exist
@@ -77,22 +77,15 @@ class DeepSTARREvaluator(BaseEvaluator):
                 data_path = 'model_zoo/deepstarr/DeepSTARR_data.h5'
                 print(f"Using default data path: {data_path}")
             
-            if use_evoaug_oracle:
-                # Load EvoAug oracle model
-                from model_zoo.deepstarr.deepstarr import load_evoaug_oracle_model
-                oracle = load_evoaug_oracle_model(oracle_checkpoint, device=self.device)
-                print("✓ Loaded EvoAug DeepSTARR oracle model")
-                return oracle
-            else:
-                # Load standard Lightning oracle model
-                oracle = PL_DeepSTARR.load_from_checkpoint(
-                    oracle_checkpoint, 
-                    input_h5_file=data_path
-                ).eval()
-                oracle.to(self.device)
-                
-                print("✓ Loaded standard DeepSTARR oracle model")
-                return oracle
+            # Load standard Lightning oracle model
+            oracle = PL_DeepSTARR.load_from_checkpoint(
+                oracle_checkpoint, 
+                input_h5_file=data_path
+            ).eval()
+            oracle.to(self.device)
+            
+            print("✓ Loaded standard DeepSTARR oracle model")
+            return oracle
             
         except Exception as e:
             print(f"Failed to load DeepSTARR oracle model: {e}")
@@ -142,10 +135,9 @@ class DeepSTARREvaluator(BaseEvaluator):
             npz_path = os.path.join(checkpoint_dir, "sample.npz")
             self.save_sequences_as_npz(sampled_sequences, npz_path)
         
-        # Load oracle model with EvoAug flag from config
+        # Load oracle model
         print("Loading oracle model for SP-MSE evaluation...")
-        use_evoaug_oracle = getattr(config.eval, 'use_evoaug_oracle', False)
-        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path, use_evoaug_oracle)
+        oracle_model = self.load_oracle_model(oracle_checkpoint, data_path)
         
         if oracle_model is None:
             return {
@@ -170,7 +162,6 @@ class DeepSTARREvaluator(BaseEvaluator):
             'sampling_steps': steps,
             'sp_mse': sp_mse,
             'oracle_evaluation': 'completed',
-            'use_evoaug_oracle': use_evoaug_oracle
         }
         
         print(f"SP-MSE: {sp_mse:.6f}")
