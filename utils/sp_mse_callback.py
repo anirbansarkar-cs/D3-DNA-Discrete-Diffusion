@@ -221,9 +221,9 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                     # Save new best checkpoint in checkpoints directory (matching normal checkpoint location)
                     # Use logger's save_dir to match the work_dir used in normal checkpoint saving
                     if hasattr(trainer.logger, 'save_dir') and trainer.logger.save_dir:
-                        work_dir = trainer.logger.save_dir
+                        work_dir = os.path.abspath(trainer.logger.save_dir)
                     else:
-                        work_dir = trainer.default_root_dir
+                        work_dir = os.path.abspath(trainer.default_root_dir)
                     checkpoints_dir = os.path.join(work_dir, "checkpoints")
                     os.makedirs(checkpoints_dir, exist_ok=True)
                     
