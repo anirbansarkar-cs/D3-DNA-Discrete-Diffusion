@@ -37,6 +37,17 @@ from scipy import stats
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
+# EvoAug imports (optional)
+try:
+    from evoaug.augment import (
+        RandomDeletion, RandomRC, RandomInsertion,
+        RandomTranslocation, RandomMutation, RandomNoise
+    )
+    from evoaug.evoaug import RobustLoader
+    EVOAUG_AVAILABLE = True
+except Exception:
+    EVOAUG_AVAILABLE = False
+
 # Add project root to Python path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -44,6 +55,10 @@ sys.path.insert(0, str(project_root))
 from scripts import sampling
 from model_zoo.deepstarr.data import get_deepstarr_datasets
 from model_zoo.deepstarr.models import load_trained_model
+
+# Ensure deterministic CuBLAS workspace config is set before any CUDA operations
+if 'CUBLAS_WORKSPACE_CONFIG' not in os.environ:
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
 
 def set_global_seed(seed: int):
@@ -342,7 +357,8 @@ def training_with_PL(dataset_path: str,
                      verbose: bool = False,
                      seed: int = 42,
                      out_dir: Optional[str] = None,
-                     filename: Optional[str] = None) -> Dict[str, Any]:
+                     filename: Optional[str] = None,
+                     use_evoaug: bool = False) -> Dict[str, Any]:
     """Train DeepSTARR model using PyTorch Lightning.
     
     Args:
@@ -354,6 +370,7 @@ def training_with_PL(dataset_path: str,
         seed: Random seed
         out_dir: Directory to save checkpoints
         filename: Base filename (without extension) for the checkpoint
+        use_evoaug: If True, enable EvoAug with a hardcoded augmentation list
         
     Returns:
         Dictionary containing trained model and metrics
@@ -387,13 +404,26 @@ def training_with_PL(dataset_path: str,
                 X_train = X_train[train_indices]
                 Y_train = Y_train[train_indices]
         
-        # Handle data format - convert indices to one-hot if needed
-        if X_train.dim() == 2:  # (N, L) indices format
-            X_train = F.one_hot(X_train.long(), num_classes=4).float().permute(0, 2, 1)
-            X_val = F.one_hot(X_val.long(), num_classes=4).float().permute(0, 2, 1)
-        elif X_train.dim() == 3 and X_train.shape[-1] == 4:  # (N, L, 4) format
-            X_train = X_train.permute(0, 2, 1)  # Convert to (N, 4, L)
-            X_val = X_val.permute(0, 2, 1)
+        # If EvoAug, ensure inputs are (B, 4, L) one-hot; else use current logic
+        if use_evoaug:
+            if X_train.dim() == 2:  # (N, L) indices format
+                X_train = F.one_hot(X_train.long(), num_classes=4).float().permute(0, 2, 1)
+                X_val = F.one_hot(X_val.long(), num_classes=4).float().permute(0, 2, 1)
+            elif X_train.dim() == 3 and X_train.shape[-1] == 4:  # (N, L, 4)
+                X_train = X_train.permute(0, 2, 1)
+                X_val = X_val.permute(0, 2, 1)
+            elif X_train.dim() == 3 and X_train.shape[1] == 4:  # already (N, 4, L)
+                pass
+            else:
+                raise ValueError(f"Unexpected X_train shape for EvoAug: {X_train.shape}")
+        else:
+            # Standard: convert to (N, 4, L) if needed for conv model
+            if X_train.dim() == 2:  # (N, L) indices format
+                X_train = F.one_hot(X_train.long(), num_classes=4).float().permute(0, 2, 1)
+                X_val = F.one_hot(X_val.long(), num_classes=4).float().permute(0, 2, 1)
+            elif X_train.dim() == 3 and X_train.shape[-1] == 4:  # (N, L, 4) format
+                X_train = X_train.permute(0, 2, 1)  # Convert to (N, 4, L)
+                X_val = X_val.permute(0, 2, 1)
         
         if verbose:
             print(f"Training data shape: {X_train.shape}")
@@ -412,21 +442,60 @@ def training_with_PL(dataset_path: str,
         # Setup data loaders with reduced num_workers for large datasets
         num_workers = 0 if len(X_train) > 500000 else 2  # Reduce workers for large datasets
         
-        train_dataloader = DataLoader(
-            TensorDataset(X_train, Y_train), 
-            batch_size=batch_size, 
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=True,
-            drop_last=True
-        )
-        val_dataloader = DataLoader(
-            TensorDataset(X_val, Y_val), 
-            batch_size=batch_size, 
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True
-        )
+        if use_evoaug and EVOAUG_AVAILABLE:
+            # Hardcoded augmentation list similar to data.py
+            augment_list = [
+                RandomTranslocation(shift_min=0, shift_max=20),
+                RandomRC(rc_prob=0.0),
+                RandomMutation(mut_frac=0.05),
+                RandomNoise(noise_mean=0, noise_std=0.3),
+            ]
+            # Build base datasets (one-hot tensors)
+            train_base = TensorDataset(X_train, Y_train)
+            val_base = TensorDataset(X_val, Y_val)
+            
+            train_dataloader = RobustLoader(
+                base_dataset=train_base,
+                augment_list=augment_list,
+                max_augs_per_seq=2,
+                hard_aug=True,
+                batch_size=batch_size,
+                sampler=None,
+                num_workers=num_workers,
+                pin_memory=True,
+                shuffle=True,
+            )
+            val_dataloader = RobustLoader(
+                base_dataset=val_base,
+                augment_list=augment_list,
+                max_augs_per_seq=2,
+                hard_aug=True,
+                batch_size=batch_size,
+                sampler=None,
+                num_workers=num_workers,
+                pin_memory=True,
+                shuffle=False,
+            )
+            # Disable augmentations for validation
+            val_dataloader.disable_augmentations()
+        else:
+            if use_evoaug and not EVOAUG_AVAILABLE:
+                print("Warning: EvoAug requested but not available. Falling back to standard dataloaders.")
+            train_dataloader = DataLoader(
+                TensorDataset(X_train, Y_train), 
+                batch_size=batch_size, 
+                shuffle=True,
+                num_workers=num_workers,
+                pin_memory=True,
+                drop_last=True
+            )
+            val_dataloader = DataLoader(
+                TensorDataset(X_val, Y_val), 
+                batch_size=batch_size, 
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True
+            )
         
         # Setup callbacks
         dataset_name = Path(dataset_path).stem
@@ -508,13 +577,14 @@ def load_pl_deepstarr_from_checkpoint(ckpt_path: str, batch_size: int = 128, pat
 class DeepSTARRIterativeAugmentationSampler:
     """DeepSTARR iterative augmentation sampling for small data experiments."""
     
-    def __init__(self, config: Any, device: str = 'cuda', seed: int = 42):
+    def __init__(self, config: Any, device: str = 'cuda', seed: int = 42, use_evoaug: bool = False):
         self.config = config
         self.device = torch.device(device)
         self.sequence_length = 249
         self.accumulated_sequences = []
         self.accumulated_targets = []
         self.seed = int(seed)
+        self.use_evoaug = use_evoaug
 
     def _maybe_len(self, dataset) -> int:
         """Safely get length of a dataset without triggering typing complaints."""
@@ -755,7 +825,8 @@ class DeepSTARRIterativeAugmentationSampler:
                         verbose=False,
                         seed=model_seed,
                         out_dir=work_dir,
-                        filename=ckpt_name
+                        filename=ckpt_name,
+                        use_evoaug=self.use_evoaug,
                     )
                     trained_model = train_result["model"]
                     checkpoint_path = train_result["checkpoint"]
@@ -821,6 +892,7 @@ class DeepSTARRIterativeAugmentationSampler:
                                             batch_size: int = 32,
                                             architecture: str = 'transformer',
                                             num_oracle_models: int = 5) -> Dict[str, Any]:
+
         """
         Run iterative augmentation experiment following the paper's methodology:
         1. Baseline: 25% of original data (100,569 sequences)
@@ -1014,6 +1086,7 @@ def main():
                        default='transformer', help='Model architecture')
     parser.add_argument('--seed', type=int, default=42, help='Global seed for reproducibility')
     parser.add_argument('--num_oracle_models', type=int, default=5, help='Number of oracle models to train per condition (default: 5)')
+    parser.add_argument('--use_evoaug', action='store_true', help='Enable EvoAug for training')
     
     args = parser.parse_args()
     
@@ -1033,7 +1106,7 @@ def main():
     set_global_seed(int(args.seed))
     
     # Create sampler and run experiment
-    sampler = DeepSTARRIterativeAugmentationSampler(config, seed=int(args.seed))
+    sampler = DeepSTARRIterativeAugmentationSampler(config, seed=int(args.seed), use_evoaug=args.use_evoaug)
     
     try:
         results = sampler.run_iterative_augmentation_experiment(
@@ -1045,7 +1118,7 @@ def main():
             num_steps=args.num_steps,
             batch_size=args.batch_size,
             architecture=args.architecture,
-            num_oracle_models=args.num_oracle_models
+            num_oracle_models=args.num_oracle_models,
         )
         
         # Print summary
