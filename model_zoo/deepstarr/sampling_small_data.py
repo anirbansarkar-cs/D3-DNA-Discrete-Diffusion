@@ -43,7 +43,6 @@ try:
         RandomDeletion, RandomRC, RandomInsertion,
         RandomTranslocation, RandomMutation, RandomNoise
     )
-    from evoaug.evoaug import RobustLoader
     EVOAUG_AVAILABLE = True
 except Exception:
     EVOAUG_AVAILABLE = False
@@ -440,44 +439,71 @@ def training_with_PL(dataset_path: str,
         )
         
         # Setup data loaders with reduced num_workers for large datasets
-        num_workers = 0 if len(X_train) > 500000 else 2  # Reduce workers for large datasets
+        # num_workers = 0 if len(X_train) > 500000 else 2  # Reduce workers for large datasets
+        num_workers = 4
         
         if use_evoaug and EVOAUG_AVAILABLE:
             # Hardcoded augmentation list similar to data.py
             augment_list = [
-                RandomTranslocation(shift_min=0, shift_max=20),
+                RandomTranslocation(shift_min=0, shift_max=25),
                 RandomRC(rc_prob=0.0),
-                RandomMutation(mut_frac=0.05),
-                RandomNoise(noise_mean=0, noise_std=0.3),
+                RandomMutation(),
+                RandomDeletion(delete_min=0, delete_max=20),
             ]
             # Build base datasets (one-hot tensors)
             train_base = TensorDataset(X_train, Y_train)
             val_base = TensorDataset(X_val, Y_val)
             
-            train_dataloader = RobustLoader(
-                base_dataset=train_base,
-                augment_list=augment_list,
-                max_augs_per_seq=2,
-                hard_aug=True,
-                batch_size=batch_size,
-                sampler=None,
-                num_workers=num_workers,
-                pin_memory=True,
-                shuffle=True,
-            )
-            val_dataloader = RobustLoader(
-                base_dataset=val_base,
-                augment_list=augment_list,
-                max_augs_per_seq=2,
-                hard_aug=True,
-                batch_size=batch_size,
-                sampler=None,
-                num_workers=num_workers,
-                pin_memory=True,
-                shuffle=False,
-            )
-            # Disable augmentations for validation
-            val_dataloader.disable_augmentations()
+            # Import RobustLoader lazily to avoid linter/type issues
+            try:
+                from evoaug.evoaug import RobustLoader  # type: ignore
+            except Exception as e:
+                print(f"Warning: EvoAug RobustLoader unavailable: {e}. Falling back to standard dataloaders.")
+                EVOAUG_AVAILABLE_LOCAL = False
+            else:
+                EVOAUG_AVAILABLE_LOCAL = True
+
+            if EVOAUG_AVAILABLE_LOCAL:
+                train_dataloader = RobustLoader(
+                    base_dataset=train_base,
+                    augment_list=augment_list,
+                    max_augs_per_seq=2,
+                    hard_aug=True,
+                    batch_size=batch_size,
+                    sampler=None,
+                    num_workers=num_workers,
+                    pin_memory=True,
+                    shuffle=True,
+                )
+                val_dataloader = RobustLoader(
+                    base_dataset=val_base,
+                    augment_list=augment_list,
+                    max_augs_per_seq=2,
+                    hard_aug=True,
+                    batch_size=batch_size,
+                    sampler=None,
+                    num_workers=num_workers,
+                    pin_memory=True,
+                    shuffle=False,
+                )
+                # Disable augmentations for validation
+                val_dataloader.disable_augmentations()
+            else:
+                train_dataloader = DataLoader(
+                    TensorDataset(X_train, Y_train), 
+                    batch_size=batch_size, 
+                    shuffle=True,
+                    num_workers=num_workers,
+                    pin_memory=True,
+                    drop_last=True
+                )
+                val_dataloader = DataLoader(
+                    TensorDataset(X_val, Y_val), 
+                    batch_size=batch_size, 
+                    shuffle=False,
+                    num_workers=num_workers,
+                    pin_memory=True
+                )
         else:
             if use_evoaug and not EVOAUG_AVAILABLE:
                 print("Warning: EvoAug requested but not available. Falling back to standard dataloaders.")
@@ -533,7 +559,52 @@ def training_with_PL(dataset_path: str,
         
         # Train
         trainer.fit(model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-        
+
+        # finetune on the original data without augmentations
+        # Build non-augmented dataloaders for finetuning
+        finetune_train_loader = DataLoader(
+            TensorDataset(X_train, Y_train),
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
+        finetune_val_loader = DataLoader(
+            TensorDataset(X_val, Y_val),
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+        # Finetune callbacks (reuse same filename so the best finetuned weights overwrite prior best)
+        finetune_ckpt = ModelCheckpoint(
+            monitor='val_loss',
+            mode='min',
+            save_top_k=1,
+            save_weights_only=True,
+            dirpath=ckpt_dir,
+            filename=ckptfile,
+        )
+        finetune_early_stop = EarlyStopping(
+            monitor='val_loss',
+            min_delta=model.min_delta,
+            patience=5,
+            verbose=False,
+            mode='min'
+        )
+        finetune_trainer = pl.Trainer(
+            accelerator='cuda' if torch.cuda.is_available() else 'cpu',
+            devices=1,
+            max_epochs=10,
+            logger=False,
+            callbacks=[finetune_ckpt, finetune_early_stop],
+            deterministic=True,
+            enable_progress_bar=verbose,
+            enable_model_summary=False
+        )
+        finetune_trainer.fit(model, train_dataloaders=finetune_train_loader, val_dataloaders=finetune_val_loader)
+
         # Clean up checkpoint filename
         old_path = os.path.join(ckpt_dir, f"{ckptfile}-v1.ckpt")
         new_path = os.path.join(ckpt_dir, f"{ckptfile}.ckpt")
@@ -652,7 +723,7 @@ class DeepSTARRIterativeAugmentationSampler:
             print(f"  - Subset: {len(subset_sequences)}, Accumulated: {len(all_sequences) - len(subset_sequences)}")
         
         return DataLoader(dataset, batch_size=batch_size, shuffle=False, 
-                         num_workers=2, pin_memory=True)
+                         num_workers=4, pin_memory=True)
     
     def sample_sequences_for_iteration(self, model, graph, noise, dataloader: DataLoader, 
                                      num_steps: int, show_progress: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -773,7 +844,7 @@ class DeepSTARRIterativeAugmentationSampler:
             return os.path.abspath(model_dir)
 
     def _train_multiple_oracles_for_dataset(self, dataset_path: str, work_dir: str, 
-                                          test_data_path: str, num_models: int = 5) -> Dict[str, Any]:
+                                          test_data_path: str, num_models: int = 1) -> Dict[str, Any]:
         """Train multiple DeepSTARR oracles on the given dataset and return aggregated metrics.
         
         Following Section 4.2: "For each training set, we trained 5 DeepSTARR models using 
@@ -887,11 +958,11 @@ class DeepSTARRIterativeAugmentationSampler:
     
     def run_iterative_augmentation_experiment(self, model_checkpoint: str, oracle_checkpoint: str, 
                                             data_path: str, output_dir: str, 
-                                            max_iterations: int = 3,
+                                            max_iterations: int = 6,
                                             num_steps: Optional[int] = None, 
                                             batch_size: int = 32,
                                             architecture: str = 'transformer',
-                                            num_oracle_models: int = 5) -> Dict[str, Any]:
+                                            num_oracle_models: int = 1) -> Dict[str, Any]:
 
         """
         Run iterative augmentation experiment following the paper's methodology:
@@ -913,10 +984,66 @@ class DeepSTARRIterativeAugmentationSampler:
         datasets_dir = os.path.join(model_specific_dir, "datasets")
         oracles_dir = os.path.join(model_specific_dir, "oracles")
         
+        # Results path and potential resume from existing
+        results_path = os.path.join(model_specific_dir, "iterative_augmentation_results.json")
+        results: Dict[str, Any]
+        existing_iterations: set = set()
+        if os.path.exists(results_path):
+            try:
+                with open(results_path, 'r') as f:
+                    loaded = json.load(f)
+                # Basic validation
+                if isinstance(loaded, dict) and 'iteration_results' in loaded:
+                    results = loaded
+                    existing_iterations = {int(item.get('iteration', -1)) for item in results.get('iteration_results', [])}
+                else:
+                    results = {
+                        'experiment_config': {},
+                        'iteration_results': []
+                    }
+            except Exception:
+                # On any load issue, start a fresh results container
+                results = {
+                    'experiment_config': {},
+                    'iteration_results': []
+                }
+        else:
+            results = {
+                'experiment_config': {},
+                'iteration_results': []
+            }
+        
         # Get subset dataset size (25% baseline)
         train_ds = self._get_dataset_split(data_path, 'train')
-        subset_size = self._maybe_len(train_ds)
-        
+        subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
+
+        # Enforce exact target sizes per iteration
+        target_sizes = {0: 100569, 1: 201138, 2: 301707, 3: 402276}
+        # Trim baseline to 100,569 if larger
+        if subset_sequences.shape[0] > target_sizes[0]:
+            subset_sequences = subset_sequences[:target_sizes[0]]
+            subset_targets = subset_targets[:target_sizes[0]]
+        elif subset_sequences.shape[0] < target_sizes[0]:
+            print(f"Warning: baseline subset size {subset_sequences.shape[0]} is less than expected {target_sizes[0]}")
+
+        # Save iteration 0 dataset (baseline) only if not already present
+        iter0_path = os.path.join(datasets_dir, f"iteration_0_dataset.h5")
+        if os.path.exists(iter0_path):
+            print(f"Found existing baseline dataset at {iter0_path}; skipping creation.")
+            # Read subset size from file if possible
+            try:
+                with h5py.File(iter0_path, 'r') as f:
+                    if 'X_train' in f:
+                        subset_size = int(np.array(f['X_train']).shape[0])
+                    else:
+                        subset_size = int(subset_sequences.shape[0])
+            except Exception:
+                subset_size = int(subset_sequences.shape[0])
+        else:
+            iter0_path = self.save_iteration_dataset(subset_sequences, subset_targets, iter0_path, 0)
+            subset_size = int(subset_sequences.shape[0])
+
+        # Print experiment header and load D3 model
         print("=" * 70)
         print("DEEPSTARR ITERATIVE AUGMENTATION EXPERIMENT")
         print("=" * 70)
@@ -928,13 +1055,12 @@ class DeepSTARRIterativeAugmentationSampler:
         print(f"Number of oracle models per condition: {num_oracle_models}")
         print(f"Output directory: {model_specific_dir}")
         print("=" * 70)
-        
-        # Load D3 model
+
         model, graph, noise = self.load_model(model_checkpoint, architecture)
-        
-        # Initialize results
-        results = {
-            'experiment_config': {
+
+        # Initialize results container if empty / update experiment config
+        if not results.get('experiment_config'):
+            results['experiment_config'] = {
                 'model_checkpoint': model_checkpoint,
                 'oracle_checkpoint_initial': oracle_checkpoint,
                 'data_path': data_path,
@@ -946,53 +1072,161 @@ class DeepSTARRIterativeAugmentationSampler:
                 'num_oracle_models': num_oracle_models,
                 'model_specific_dir': model_specific_dir,
                 'seed': self.seed,
-            },
-            'iteration_results': []
-        }
+            }
+        else:
+            # Keep prior settings but update dynamic ones
+            results['experiment_config'].update({
+                'max_iterations': max_iterations,
+                'num_steps': num_steps,
+                'batch_size': batch_size,
+                'num_oracle_models': num_oracle_models,
+                'seed': self.seed,
+            })
         
-        # Reset accumulated data
-        self.accumulated_sequences = []
-        self.accumulated_targets = []
-        
-        # Extract subset data for iteration 0 (25% baseline)
-        subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
-        
-        # Save iteration 0 dataset (baseline)
-        iter0_path = os.path.join(datasets_dir, f"iteration_0_dataset.h5")
-        iter0_path = self.save_iteration_dataset(subset_sequences, subset_targets, iter0_path, 0)
-        
-        # Train multiple oracles on iteration 0 dataset and evaluate on test set
-        iter0_oracle_dir = os.path.join(oracles_dir, "iteration_0")
-        iter0_train_info = self._train_multiple_oracles_for_dataset(
-            iter0_path, iter0_oracle_dir, data_path, num_oracle_models
-        )
-        
-        # Record iteration 0 results
-        results['iteration_results'].append({
-            'iteration': 0,
-            'dataset_path': iter0_path,
-            'dataset_size': int(subset_sequences.shape[0]),
-            'original_size': int(subset_sequences.shape[0]),
-            'generated_size': 0,
-            'oracle_checkpoints': iter0_train_info.get("checkpoints"),
-            'dev_correlations': iter0_train_info.get("dev_correlations"),
-            'hk_correlations': iter0_train_info.get("hk_correlations"),
-            'avg_test_pearson_dev': iter0_train_info.get("avg_dev_pearson"),
-            'std_test_pearson_dev': iter0_train_info.get("std_dev_pearson"),
-            'avg_test_pearson_hk': iter0_train_info.get("avg_hk_pearson"),
-            'std_test_pearson_hk': iter0_train_info.get("std_hk_pearson"),
-            'num_successful_models': iter0_train_info.get("num_successful_models"),
-            'description': "Baseline: 25% original data"
-        })
-        
-        print(f"\nIteration 0 (Baseline): {subset_sequences.shape[0]} samples")
-        print(f"Test Pearson Dev: {iter0_train_info.get('avg_dev_pearson'):.4f} ± {iter0_train_info.get('std_dev_pearson'):.4f}")
-        print(f"Test Pearson HK:  {iter0_train_info.get('avg_hk_pearson'):.4f} ± {iter0_train_info.get('std_hk_pearson'):.4f}")
-        
-        # Run augmentation iterations (1, 2, 3 sets of generated sequences)
-        for iteration in range(1, max_iterations + 1):
-            print(f"\n{'='*20} ITERATION {iteration} {'='*20}")
+        # Train/evaluate oracles for iteration 0 only if not already recorded
+        if 0 not in existing_iterations:
+            iter0_oracle_dir = os.path.join(oracles_dir, "iteration_0")
+            iter0_train_info = self._train_multiple_oracles_for_dataset(
+                iter0_path, iter0_oracle_dir, data_path, num_oracle_models
+            )
             
+            # Record iteration 0 results
+            results['iteration_results'].append({
+                'iteration': 0,
+                'dataset_path': iter0_path,
+                'dataset_size': subset_size,
+                'original_size': subset_size,
+                'generated_size': 0,
+                'oracle_checkpoints': iter0_train_info.get("checkpoints"),
+                'dev_correlations': iter0_train_info.get("dev_correlations"),
+                'hk_correlations': iter0_train_info.get("hk_correlations"),
+                'avg_test_pearson_dev': iter0_train_info.get("avg_dev_pearson"),
+                'std_test_pearson_dev': iter0_train_info.get("std_dev_pearson"),
+                'avg_test_pearson_hk': iter0_train_info.get("avg_hk_pearson"),
+                'std_test_pearson_hk': iter0_train_info.get("std_hk_pearson"),
+                'num_successful_models': iter0_train_info.get("num_successful_models"),
+                'description': "Baseline: 25% original data"
+            })
+            
+            print(f"\nIteration 0 (Baseline): {subset_size} samples")
+            print(f"Test Pearson Dev: {iter0_train_info.get('avg_dev_pearson'):.4f} ± {iter0_train_info.get('std_dev_pearson'):.4f}")
+            print(f"Test Pearson HK:  {iter0_train_info.get('avg_hk_pearson'):.4f} ± {iter0_train_info.get('std_dev_pearson'):.4f}")
+            
+            # Persist results incrementally
+            try:
+                with open(results_path, 'w') as f:
+                    json.dump(results, f, indent=2, default=str)
+            except Exception as e:
+                print(f"Warning: failed to save results after iteration 0: {e}")
+        else:
+            print("Iteration 0 already present in results; skipping re-evaluation.")
+        
+        # Run augmentation iterations (1..max_iterations)
+        for iteration in range(1, max_iterations + 1):
+            # If iteration exists in results, only skip when all oracles are complete
+            if iteration in existing_iterations:
+                # Find the recorded entry for this iteration
+                recorded = None
+                for item in results.get('iteration_results', []):
+                    if int(item.get('iteration', -1)) == iteration:
+                        recorded = item
+                        break
+                if recorded is not None:
+                    dev_corrs = recorded.get('dev_correlations') or []
+                    # Count valid non-NaN correlations
+                    valid_count = 0
+                    for v in dev_corrs:
+                        try:
+                            is_nan = np.isnan(v)
+                        except Exception:
+                            is_nan = False
+                        if v is not None and not is_nan:
+                            valid_count += 1
+                    if valid_count >= int(num_oracle_models):
+                        print(f"\n{'='*20} ITERATION {iteration} (resume: already complete) {'='*20}")
+                        continue
+                    else:
+                        print(f"\n{'='*20} ITERATION {iteration} (resume: incomplete oracles, continuing) {'='*20}")
+                else:
+                    print(f"\n{'='*20} ITERATION {iteration} (resume: no recorded entry, continuing) {'='*20}")
+            else:
+                print(f"\n{'='*20} ITERATION {iteration} {'='*20}")
+            
+            # Dataset path for this iteration
+            iter_path = os.path.join(datasets_dir, f"iteration_{iteration}_dataset.h5")
+            
+            # If dataset exists, skip sampling for this iteration but still (re)train missing oracles
+            if os.path.exists(iter_path):
+                print(f"Found existing dataset for iteration {iteration} at {iter_path}; skipping sampling.")
+                # Load sizes for reporting
+                try:
+                    with h5py.File(iter_path, 'r') as f:
+                        total_size = int(np.array(f['X_train']).shape[0]) if 'X_train' in f else None
+                except Exception:
+                    total_size = None
+                if total_size is None:
+                    total_size = subset_size  # Best-effort fallback
+                generated_size = max(0, total_size - subset_size)
+                
+                # Train multiple oracles on augmented dataset and evaluate on test set
+                oracle_iter_dir = os.path.join(oracles_dir, f"iteration_{iteration}")
+                train_info = self._train_multiple_oracles_for_dataset(
+                    iter_path, oracle_iter_dir, data_path, num_oracle_models
+                )
+                
+                # Store or update results entry for this iteration
+                updated = False
+                for idx, item in enumerate(results['iteration_results']):
+                    if int(item.get('iteration', -1)) == iteration:
+                        results['iteration_results'][idx].update({
+                            'dataset_path': iter_path,
+                            'dataset_size': int(total_size),
+                            'original_size': subset_size,
+                            'generated_size': int(generated_size),
+                            'oracle_checkpoints': train_info.get("checkpoints"),
+                            'dev_correlations': train_info.get("dev_correlations"),
+                            'hk_correlations': train_info.get("hk_correlations"),
+                            'avg_test_pearson_dev': train_info.get("avg_dev_pearson"),
+                            'std_test_pearson_dev': train_info.get("std_dev_pearson"),
+                            'avg_test_pearson_hk': train_info.get("avg_hk_pearson"),
+                            'std_test_pearson_hk': train_info.get("std_hk_pearson"),
+                            'num_successful_models': train_info.get("num_successful_models"),
+                            'description': results['iteration_results'][idx].get('description', f"Original + {iteration} set{'s' if iteration > 1 else ''} of generated sequences")
+                        })
+                        updated = True
+                        break
+                if not updated:
+                    results['iteration_results'].append({
+                        'iteration': iteration,
+                        'dataset_path': iter_path,
+                        'dataset_size': int(total_size),
+                        'original_size': subset_size,
+                        'generated_size': int(generated_size),
+                        'oracle_checkpoints': train_info.get("checkpoints"),
+                        'dev_correlations': train_info.get("dev_correlations"),
+                        'hk_correlations': train_info.get("hk_correlations"),
+                        'avg_test_pearson_dev': train_info.get("avg_dev_pearson"),
+                        'std_test_pearson_dev': train_info.get("std_dev_pearson"),
+                        'avg_test_pearson_hk': train_info.get("avg_hk_pearson"),
+                        'std_test_pearson_hk': train_info.get("std_hk_pearson"),
+                        'num_successful_models': train_info.get("num_successful_models"),
+                        'description': f"Original + {iteration} set{'s' if iteration > 1 else ''} of generated sequences"
+                    })
+                
+                print(f"Test Pearson Dev: {train_info.get('avg_dev_pearson'):.4f} ± {train_info.get('std_dev_pearson'):.4f}")
+                print(f"Test Pearson HK:  {train_info.get('avg_hk_pearson'):.4f} ± {train_info.get('std_hk_pearson'):.4f}")
+                
+                # Persist results incrementally after each iteration
+                try:
+                    with open(results_path, 'w') as f:
+                        json.dump(results, f, indent=2, default=str)
+                except Exception as e:
+                    print(f"Warning: failed to save results after iteration {iteration}: {e}")
+                
+                # Move on to next iteration
+                continue
+            
+            # Otherwise: sample new sequences for this iteration and then train oracles
             # Create dataloader for sampling (uses current accumulated data)
             dataloader = self.create_dataloader(data_path, 'train', batch_size, iteration-1)
             
@@ -1007,12 +1241,19 @@ class DeepSTARRIterativeAugmentationSampler:
             self.accumulated_targets.append(sampled_targets)
             
             # Compose current dataset (original 25% + all accumulated generated sequences)
-            # Convert subset_sequences to one-hot format to match sampled_sequences
             subset_sequences_onehot = F.one_hot(subset_sequences.long(), num_classes=4).float()
             all_sequences = [subset_sequences_onehot] + self.accumulated_sequences
             all_targets = [subset_targets] + self.accumulated_targets
             current_sequences = torch.cat(all_sequences, dim=0)
             current_targets = torch.cat(all_targets, dim=0)
+            
+            # Enforce exact aggregated dataset sizes for each iteration
+            desired_total = target_sizes.get(iteration, current_sequences.shape[0])
+            if current_sequences.shape[0] > desired_total:
+                current_sequences = current_sequences[:desired_total]
+                current_targets = current_targets[:desired_total]
+            elif current_sequences.shape[0] < desired_total:
+                print(f"Warning: iteration {iteration} has {current_sequences.shape[0]} samples, less than expected {desired_total}")
             
             total_size = len(current_sequences)
             generated_size = total_size - subset_size
@@ -1023,7 +1264,6 @@ class DeepSTARRIterativeAugmentationSampler:
             print(f"  - Ratio: {generated_size/subset_size:.2f}x augmentation")
             
             # Save dataset for this iteration
-            iter_path = os.path.join(datasets_dir, f"iteration_{iteration}_dataset.h5")
             iter_path = self.save_iteration_dataset(current_sequences, current_targets, iter_path, iteration)
             
             # Train multiple oracles on augmented dataset and evaluate on test set
@@ -1036,9 +1276,9 @@ class DeepSTARRIterativeAugmentationSampler:
             results['iteration_results'].append({
                 'iteration': iteration,
                 'dataset_path': iter_path,
-                'dataset_size': total_size,
+                'dataset_size': int(total_size),
                 'original_size': subset_size,
-                'generated_size': generated_size,
+                'generated_size': int(generated_size),
                 'oracle_checkpoints': train_info.get("checkpoints"),
                 'dev_correlations': train_info.get("dev_correlations"),
                 'hk_correlations': train_info.get("hk_correlations"),
@@ -1052,9 +1292,15 @@ class DeepSTARRIterativeAugmentationSampler:
             
             print(f"Test Pearson Dev: {train_info.get('avg_dev_pearson'):.4f} ± {train_info.get('std_dev_pearson'):.4f}")
             print(f"Test Pearson HK:  {train_info.get('avg_hk_pearson'):.4f} ± {train_info.get('std_hk_pearson'):.4f}")
+            
+            # Persist results incrementally after each iteration
+            try:
+                with open(results_path, 'w') as f:
+                    json.dump(results, f, indent=2, default=str)
+            except Exception as e:
+                print(f"Warning: failed to save results after iteration {iteration}: {e}")
         
-        # Save experiment results
-        results_path = os.path.join(model_specific_dir, "iterative_augmentation_results.json")
+        # Final save (redundant but ensures latest results are persisted)
         try:
             with open(results_path, 'w') as f:
                 json.dump(results, f, indent=2, default=str)  # default=str to handle numpy types
@@ -1079,7 +1325,7 @@ def main():
     parser.add_argument('--data_path', required=True, help='Path to subset data file (25% of DeepSTARR)')
     parser.add_argument('--output_dir', required=True, help='Directory to save iteration datasets and oracles')
     parser.add_argument('--config', help='Path to config file (optional)')
-    parser.add_argument('--max_iterations', type=int, default=3, help='Maximum iterations (default: 3)')
+    parser.add_argument('--max_iterations', type=int, default=6, help='Maximum iterations (default: 3)')
     parser.add_argument('--num_steps', type=int, help='Sampling steps (default: sequence length)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size (default: 32)')
     parser.add_argument('--architecture', choices=['transformer', 'convolutional'], 
@@ -1145,7 +1391,8 @@ def main():
         import traceback
         traceback.print_exc()
         return 1
-
-
+ 
+ 
 if __name__ == '__main__':
     sys.exit(main())
+
