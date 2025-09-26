@@ -141,11 +141,13 @@ def create_evoaug_augmentation_list():
     
     # Based on optimal DeepSTARR hyperparameters from the EvoAug paper
     augment_list = [
-        RandomTranslocation(shift_min=0, shift_max=20),   # DeepSTARR optimal: shift_max = 20
-        RandomRC(rc_prob=0.0),                           # DeepSTARR optimal: rc_prob = 0 (no reverse-complement)
-        RandomMutation(mut_frac=0.05),                    # DeepSTARR optimal: mutate_frac = 0.05
-        RandomNoise(noise_mean=0, noise_std=0.3),        # DeepSTARR optimal: noise_std = 0.3
-    ]
+        RandomDeletion(delete_min=0, delete_max=20),
+        # augment.RandomRC(rc_prob=0.5),
+        # augment.RandomInsertion(insert_min=0, insert_max=20),
+        RandomTranslocation(shift_min=0, shift_max=20),
+        RandomMutation(mut_frac=0.05),
+        RandomNoise(noise_mean=0, noise_std=0.2),
+        ]
     
     return augment_list
 
