@@ -198,6 +198,12 @@ def main():
             return 1
     
     config = OmegaConf.load(args.config)
+
+    # Override paths.data_file with args.data_path if provided
+    if args.data_path:
+        config.paths.data_file = args.data_path
+        print(f"Overriding paths.data_file with {args.data_path}")
+
     evaluator = LentIMPRAEvaluator()
     
     # Use the base framework's evaluate_with_sampling method
