@@ -720,13 +720,14 @@ class DeepSTARRIterativeAugmentationSampler:
                 repeated_targets = test_targets.repeat(repeats, 1)
                 balanced_targets = repeated_targets[:target_size]
 
-        # Create dummy sequences (will be ignored during sampling)
-        dummy_sequences = torch.zeros(target_size, self.sequence_length, 4)
+        # Create dummy sequences matching the actual number of targets
+        actual_target_size = len(balanced_targets)
+        dummy_sequences = torch.zeros(actual_target_size, self.sequence_length, 4)
 
         dataset = TensorDataset(dummy_sequences, balanced_targets)
-        print(f"Created conditioning dataloader with {target_size} samples from test set")
+        print(f"Created conditioning dataloader with {actual_target_size} samples from test set (requested: {target_size})")
         if self.class_balance:
-            print(f"  - Class balanced: 4 groups with {target_size//4} samples each")
+            print(f"  - Class balanced: 4 groups with {actual_target_size//4} samples each")
 
         return DataLoader(dataset, batch_size=batch_size, shuffle=False,
                          num_workers=2, pin_memory=True)
@@ -754,7 +755,7 @@ class DeepSTARRIterativeAugmentationSampler:
                 # If no samples in this class, create synthetic targets
                 dev_val = 1.0 if 'hi' in class_name.split('_')[0] else -1.0
                 hk_val = 1.0 if 'hi' in class_name.split('_')[1] else -1.0
-                synthetic_targets = torch.tensor([[dev_val, hk_val]]).repeat(samples_per_class, 1)
+                synthetic_targets = torch.tensor([[dev_val, hk_val]], dtype=test_targets.dtype).repeat(samples_per_class, 1)
                 balanced_targets.append(synthetic_targets)
                 print(f"  Warning: No {class_name} samples found, using synthetic targets")
             elif len(class_targets) >= samples_per_class:
@@ -769,7 +770,14 @@ class DeepSTARRIterativeAugmentationSampler:
 
             print(f"  {class_name}: {len(class_targets)} available → {samples_per_class} used")
 
-        return torch.cat(balanced_targets, dim=0)
+        concatenated_targets = torch.cat(balanced_targets, dim=0)
+
+        # Ensure we return exactly the requested target_size (trim if slightly over due to rounding)
+        if len(concatenated_targets) > target_size:
+            concatenated_targets = concatenated_targets[:target_size]
+
+        print(f"  Total balanced targets created: {len(concatenated_targets)} (requested: {target_size})")
+        return concatenated_targets
 
     def create_dataloader(self, data_file: str, split: str = 'train',
                          batch_size: int = 32, augment_iteration: int = 0) -> DataLoader:
