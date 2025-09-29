@@ -1364,16 +1364,50 @@ class DeepSTARRIterativeAugmentationSampler:
                 model, graph, noise, conditioning_dataloader, num_steps, show_progress=True
             )
             
-            # Accumulate new samples
-            self.accumulated_sequences.append(sampled_sequences)
-            self.accumulated_targets.append(sampled_targets)
+            # NEW LOGIC: Build upon the complete dataset from the previous iteration
+            if iteration == 1:
+                # First augmentation: start from baseline + new samples
+                subset_sequences_onehot = F.one_hot(subset_sequences.long(), num_classes=4).float()
+                current_sequences = torch.cat([subset_sequences_onehot, sampled_sequences], dim=0)
+                current_targets = torch.cat([subset_targets, sampled_targets], dim=0)
+                print(f"  Building from baseline ({len(subset_sequences)}) + new samples ({len(sampled_sequences)})")
+            else:
+                # Load complete dataset from previous iteration
+                prev_iter_path = os.path.join(datasets_dir, f"iteration_{iteration-1}_dataset.h5")
+                if os.path.exists(prev_iter_path):
+                    print(f"  Loading previous iteration dataset from: {prev_iter_path}")
+                    with h5py.File(prev_iter_path, 'r') as f:
+                        prev_sequences = torch.tensor(np.array(f['X_train']), dtype=torch.long)
+                        prev_targets = torch.tensor(np.array(f['Y_train']), dtype=torch.float32)
 
-            # Compose current dataset (original baseline + all accumulated generated sequences)
-            subset_sequences_onehot = F.one_hot(subset_sequences.long(), num_classes=4).float()
-            all_sequences = [subset_sequences_onehot] + self.accumulated_sequences
-            all_targets = [subset_targets] + self.accumulated_targets
-            current_sequences = torch.cat(all_sequences, dim=0)
-            current_targets = torch.cat(all_targets, dim=0)
+                    # Convert previous sequences to one-hot if needed
+                    if prev_sequences.dim() == 2:  # (N, L) indices format
+                        prev_sequences_onehot = F.one_hot(prev_sequences.long(), num_classes=4).float()
+                    else:
+                        prev_sequences_onehot = prev_sequences.float()
+
+                    # Add new samples to previous complete dataset
+                    current_sequences = torch.cat([prev_sequences_onehot, sampled_sequences], dim=0)
+                    current_targets = torch.cat([prev_targets, sampled_targets], dim=0)
+                    print(f"  Building from previous iteration ({len(prev_sequences)}) + new samples ({len(sampled_sequences)})")
+                else:
+                    print(f"  Warning: Previous iteration file not found, falling back to accumulated method")
+                    # Fallback to original logic
+                    self.accumulated_sequences.append(sampled_sequences)
+                    self.accumulated_targets.append(sampled_targets)
+                    subset_sequences_onehot = F.one_hot(subset_sequences.long(), num_classes=4).float()
+                    all_sequences = [subset_sequences_onehot] + self.accumulated_sequences
+                    all_targets = [subset_targets] + self.accumulated_targets
+                    current_sequences = torch.cat(all_sequences, dim=0)
+                    current_targets = torch.cat(all_targets, dim=0)
+
+            # Update accumulated sequences for potential fallback use
+            if iteration == 1:
+                self.accumulated_sequences = [sampled_sequences]
+                self.accumulated_targets = [sampled_targets]
+            else:
+                self.accumulated_sequences.append(sampled_sequences)
+                self.accumulated_targets.append(sampled_targets)
             
             # Verify we hit the expected target size
             desired_total = target_sizes.get(iteration, current_sequences.shape[0])
@@ -1407,6 +1441,7 @@ class DeepSTARRIterativeAugmentationSampler:
                 'dataset_path': iter_path,
                 'dataset_size': int(total_size),
                 'original_size': subset_size,
+                'new_samples_this_iteration': len(sampled_sequences),
                 'generated_size': int(generated_size),
                 'oracle_checkpoints': train_info.get("checkpoints"),
                 'dev_correlations': train_info.get("dev_correlations"),
