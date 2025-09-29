@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import h5py
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
@@ -220,8 +220,6 @@ def generate_multiple_sets(model_checkpoint: str,
     Returns:
         List of output file paths for each set
     """
-    from typing import List
-
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     output_paths = []
