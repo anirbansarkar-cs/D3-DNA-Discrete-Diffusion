@@ -381,6 +381,15 @@ def main():
             device=args.device
         )
 
+        # Handle output path: if it's a directory, create a default filename
+        output_path = args.output
+        if os.path.isdir(args.output) or args.output.endswith('/'):
+            # Create directory if it doesn't exist
+            os.makedirs(args.output, exist_ok=True)
+            # Generate default filename
+            output_path = os.path.join(args.output, 'samples.h5')
+            print(f"Output is a directory, saving to: {output_path}")
+
         # Save to H5 file
         metadata = {
             'model_checkpoint': args.checkpoint,
@@ -390,7 +399,7 @@ def main():
             'conditioning_source': 'test_set' if conditioning_labels is not None else 'random'
         }
 
-        save_sequences_h5(sequences_onehot, labels, args.output, metadata)
+        save_sequences_h5(sequences_onehot, labels, output_path, metadata)
 
         print(f"\n✓ Sampling completed successfully!")
         print(f"Output: {args.output}")
