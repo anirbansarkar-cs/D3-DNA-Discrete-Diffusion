@@ -647,8 +647,8 @@ def load_pl_deepstarr_from_checkpoint(ckpt_path: str, batch_size: int = 128, pat
 
 class DeepSTARRIterativeAugmentationSampler:
     """DeepSTARR iterative augmentation sampling for small data experiments."""
-    
-    def __init__(self, config: Any, device: str = 'cuda', seed: int = 42, use_evoaug: bool = False):
+
+    def __init__(self, config: Any, device: str = 'cuda', seed: int = 42, use_evoaug: bool = False, class_balance: bool = False):
         self.config = config
         self.device = torch.device(device)
         self.sequence_length = 249
@@ -656,6 +656,7 @@ class DeepSTARRIterativeAugmentationSampler:
         self.accumulated_targets = []
         self.seed = int(seed)
         self.use_evoaug = use_evoaug
+        self.class_balance = class_balance
 
     def _maybe_len(self, dataset) -> int:
         """Safely get length of a dataset without triggering typing complaints."""
@@ -698,11 +699,83 @@ class DeepSTARRIterativeAugmentationSampler:
             targets.append(target)
         return torch.stack(sequences), torch.stack(targets)
     
-    def create_dataloader(self, data_file: str, split: str = 'train', 
+    def create_conditioning_dataloader(self, data_file: str, target_size: int, batch_size: int = 128) -> DataLoader:
+        """Create dataloader with conditioning labels from test set, but meeting target size requirements."""
+        # Get test set for conditioning labels
+        test_dataset = self._get_dataset_split(data_file, 'test')
+        test_sequences, test_targets = self._extract_sequences_targets(test_dataset)
+
+        if self.class_balance:
+            # Apply class balancing: create 4 equally-sized groups
+            balanced_targets = self._create_balanced_targets(test_targets, target_size)
+        else:
+            # Use test targets, but repeat/sample to meet target size
+            if len(test_targets) >= target_size:
+                # Sample subset
+                indices = torch.randperm(len(test_targets))[:target_size]
+                balanced_targets = test_targets[indices]
+            else:
+                # Repeat to meet target size
+                repeats = (target_size + len(test_targets) - 1) // len(test_targets)
+                repeated_targets = test_targets.repeat(repeats, 1)
+                balanced_targets = repeated_targets[:target_size]
+
+        # Create dummy sequences (will be ignored during sampling)
+        dummy_sequences = torch.zeros(target_size, self.sequence_length, 4)
+
+        dataset = TensorDataset(dummy_sequences, balanced_targets)
+        print(f"Created conditioning dataloader with {target_size} samples from test set")
+        if self.class_balance:
+            print(f"  - Class balanced: 4 groups with {target_size//4} samples each")
+
+        return DataLoader(dataset, batch_size=batch_size, shuffle=False,
+                         num_workers=2, pin_memory=True)
+
+    def _create_balanced_targets(self, test_targets: torch.Tensor, target_size: int) -> torch.Tensor:
+        """Create class-balanced targets for 4 combinations: (hi,hi), (hi,lo), (lo,hi), (lo,lo)."""
+        # Classify test targets into 4 classes based on threshold 0
+        dev_hi = test_targets[:, 0] > 0  # Dev > 0
+        hk_hi = test_targets[:, 1] > 0   # HK > 0
+
+        # Create 4 class masks
+        class_masks = {
+            'hi_hi': dev_hi & hk_hi,
+            'hi_lo': dev_hi & ~hk_hi,
+            'lo_hi': ~dev_hi & hk_hi,
+            'lo_lo': ~dev_hi & ~hk_hi
+        }
+
+        samples_per_class = target_size // 4
+        balanced_targets = []
+
+        for class_name, mask in class_masks.items():
+            class_targets = test_targets[mask]
+            if len(class_targets) == 0:
+                # If no samples in this class, create synthetic targets
+                dev_val = 1.0 if 'hi' in class_name.split('_')[0] else -1.0
+                hk_val = 1.0 if 'hi' in class_name.split('_')[1] else -1.0
+                synthetic_targets = torch.tensor([[dev_val, hk_val]]).repeat(samples_per_class, 1)
+                balanced_targets.append(synthetic_targets)
+                print(f"  Warning: No {class_name} samples found, using synthetic targets")
+            elif len(class_targets) >= samples_per_class:
+                # Sample from available targets
+                indices = torch.randperm(len(class_targets))[:samples_per_class]
+                balanced_targets.append(class_targets[indices])
+            else:
+                # Repeat to meet target
+                repeats = (samples_per_class + len(class_targets) - 1) // len(class_targets)
+                repeated = class_targets.repeat(repeats, 1)
+                balanced_targets.append(repeated[:samples_per_class])
+
+            print(f"  {class_name}: {len(class_targets)} available → {samples_per_class} used")
+
+        return torch.cat(balanced_targets, dim=0)
+
+    def create_dataloader(self, data_file: str, split: str = 'train',
                          batch_size: int = 32, augment_iteration: int = 0) -> DataLoader:
-        """Create dataloader for iterative augmentation."""
+        """Create dataloader for iterative augmentation (for oracle training only)."""
         dataset = self._get_dataset_split(data_file, split)
-        
+
         if augment_iteration == 0:
             # First iteration: use only subset data
             size_str = str(self._maybe_len(dataset))
@@ -711,50 +784,83 @@ class DeepSTARRIterativeAugmentationSampler:
             # Subsequent iterations: combine subset + accumulated data
             subset_sequences, subset_targets = self._extract_sequences_targets(dataset)
             subset_sequences_onehot = F.one_hot(subset_sequences.long(), num_classes=4).float()
-            
+
             if self.accumulated_sequences and self.accumulated_targets:
                 all_sequences = torch.cat([subset_sequences_onehot] + self.accumulated_sequences, dim=0)
                 all_targets = torch.cat([subset_targets] + self.accumulated_targets, dim=0)
             else:
                 all_sequences, all_targets = subset_sequences_onehot, subset_targets
-            
+
             dataset = TensorDataset(all_sequences, all_targets)
             print(f"Iteration {augment_iteration}: Combined dataset with {int(all_sequences.shape[0])} samples")
             print(f"  - Subset: {len(subset_sequences)}, Accumulated: {len(all_sequences) - len(subset_sequences)}")
-        
-        return DataLoader(dataset, batch_size=batch_size, shuffle=False, 
-                         num_workers=4, pin_memory=True)
+
+        return DataLoader(dataset, batch_size=batch_size, shuffle=False,
+                         num_workers=2, pin_memory=True)
     
-    def sample_sequences_for_iteration(self, model, graph, noise, dataloader: DataLoader, 
+    def sample_sequences_for_iteration(self, model, graph, noise, conditioning_dataloader: DataLoader,
                                      num_steps: int, show_progress: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Sample sequences for current iteration."""
-        batch_size = dataloader.batch_size
-        sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (batch_size, self.sequence_length), 'analytic', 
-            num_steps, device=self.device
-        )
-        
-        sampled_sequences, all_targets = [], []
-        
-        iterator = tqdm(dataloader, desc="Sampling sequences") if show_progress else dataloader
-        
-        for _, (batch, targets) in enumerate(iterator):
-            current_batch_size = batch.shape[0]
-            
-            # Handle variable batch sizes
-            if current_batch_size != batch_size:
-                sampling_fn = sampling.get_pc_sampler(
-                    graph, noise, (current_batch_size, self.sequence_length), 
-                    'analytic', num_steps, device=self.device
-                )
-            
-            sample = sampling_fn(model, targets.to(self.device))
+        """Sample sequences for current iteration using GPU-optimized sampling."""
+        # Optimization 1: Use larger batch sizes for sampling (but keep 100 steps)
+        optimal_batch_size = min(512, conditioning_dataloader.batch_size * 8)
+
+        # Collect all targets on GPU to minimize device transfers
+        print("Collecting conditioning targets...")
+        all_conditioning_targets = []
+        for _, (_, targets) in enumerate(conditioning_dataloader):
+            all_conditioning_targets.append(targets)
+        all_conditioning_targets = torch.cat(all_conditioning_targets, dim=0).to(self.device)
+
+        total_samples = len(all_conditioning_targets)
+        num_batches = (total_samples + optimal_batch_size - 1) // optimal_batch_size
+
+        # Pre-allocate GPU tensors to avoid repeated allocations
+        sampled_sequences_gpu = []
+        all_targets_gpu = []
+
+        iterator = tqdm(range(num_batches), desc=f"GPU-optimized sampling (steps={num_steps})") if show_progress else range(num_batches)
+
+        for i in iterator:
+            start_idx = i * optimal_batch_size
+            end_idx = min(start_idx + optimal_batch_size, total_samples)
+            batch_targets = all_conditioning_targets[start_idx:end_idx]
+            current_batch_size = batch_targets.shape[0]
+
+            # Create optimized sampler for this batch
+            sampling_fn = sampling.get_pc_sampler(
+                graph, noise, (current_batch_size, self.sequence_length), 'analytic',
+                num_steps, device=self.device
+            )
+
+            # Keep everything on GPU during sampling
+            with torch.amp.autocast('cuda', enabled=True, dtype=torch.bfloat16):
+                sample = sampling_fn(model, batch_targets)
+
+            # Convert to one-hot on GPU
             seq_pred_one_hot = F.one_hot(sample, num_classes=4).float()
-            # Move sampled sequences to CPU to match original data
-            sampled_sequences.append(seq_pred_one_hot.cpu())
-            all_targets.append(targets.cpu())
-        
-        return torch.cat(sampled_sequences, dim=0), torch.cat(all_targets, dim=0)
+
+            # Store on GPU and only move to CPU at the very end
+            sampled_sequences_gpu.append(seq_pred_one_hot)
+            all_targets_gpu.append(batch_targets)
+
+            # Optimization: Clear cache less frequently
+            if i % 20 == 0:
+                torch.cuda.empty_cache()
+
+        # Final concatenation on GPU, then single transfer to CPU
+        print("Finalizing results...")
+        final_sequences_gpu = torch.cat(sampled_sequences_gpu, dim=0)
+        final_targets_gpu = torch.cat(all_targets_gpu, dim=0)
+
+        # Single device transfer at the end
+        sampled_sequences_cpu = final_sequences_gpu.cpu()
+        all_targets_cpu = final_targets_gpu.cpu()
+
+        # Clean up GPU memory
+        del sampled_sequences_gpu, all_targets_gpu, final_sequences_gpu, final_targets_gpu, all_conditioning_targets
+        torch.cuda.empty_cache()
+
+        return sampled_sequences_cpu, all_targets_cpu
     
     def _format_sequences_for_oracle(self, sequences: torch.Tensor) -> torch.Tensor:
         """Format sequences for oracle model (expects B, 4, L format)."""
@@ -846,9 +952,9 @@ class DeepSTARRIterativeAugmentationSampler:
     def _train_multiple_oracles_for_dataset(self, dataset_path: str, work_dir: str, 
                                           test_data_path: str, num_models: int = 1) -> Dict[str, Any]:
         """Train multiple DeepSTARR oracles on the given dataset and return aggregated metrics.
-        
-        Following Section 4.2: "For each training set, we trained 5 DeepSTARR models using 
-        different sets of generated sequences."
+
+        Modified from Section 4.2: Now training 3 DeepSTARR models (reduced from 5) using
+        different sets of generated sequences for faster experimentation.
         """
         try:
             os.makedirs(work_dir, exist_ok=True)
@@ -865,7 +971,7 @@ class DeepSTARRIterativeAugmentationSampler:
         hk_correlations = []   # Housekeeping task (index 1) correlations from all models
         checkpoints = []
         
-        print(f"Training {num_models} oracle models for dataset: {os.path.basename(dataset_path)}")
+        print(f"Training {num_models} oracle models for dataset: {os.path.basename(dataset_path)} (optimized from 5 to 3)")
         
         dataset_stem = Path(dataset_path).stem
         # Support legacy single-checkpoint naming (no per-model suffix), if present
@@ -1017,8 +1123,10 @@ class DeepSTARRIterativeAugmentationSampler:
         train_ds = self._get_dataset_split(data_path, 'train')
         subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
 
-        # Enforce exact target sizes per iteration
-        target_sizes = {0: 100569, 1: 201138, 2: 301707, 3: 402276}
+        # Each iteration adds 25% of original training data size (100,569 samples)
+        baseline_size = 100569
+        generation_size = baseline_size  # Each generation is same size as baseline (25% of original)
+        target_sizes = {i: baseline_size + (i * generation_size) for i in range(max_iterations + 1)}
         # Trim baseline to 100,569 if larger
         if subset_sequences.shape[0] > target_sizes[0]:
             subset_sequences = subset_sequences[:target_sizes[0]]
@@ -1227,33 +1335,46 @@ class DeepSTARRIterativeAugmentationSampler:
                 continue
             
             # Otherwise: sample new sequences for this iteration and then train oracles
-            # Create dataloader for sampling (uses current accumulated data)
-            dataloader = self.create_dataloader(data_path, 'train', batch_size, iteration-1)
+            # NEW LOGIC: Generate samples to add to PREVIOUS iteration's complete dataset
+            current_target_size = target_sizes.get(iteration, subset_size)
+            if iteration == 1:
+                # First augmentation: start from baseline
+                previous_size = subset_size
+            else:
+                # Subsequent augmentations: start from previous iteration's total size
+                previous_size = target_sizes.get(iteration - 1, subset_size)
+
+            samples_to_generate = current_target_size - previous_size  # Always generates baseline_size (25%) new samples
+            print(f"  Previous iteration size: {previous_size}, Target size: {current_target_size}")
+            print(f"  Generating {samples_to_generate} new samples (25% of original training data)")
+
+            conditioning_dataloader = self.create_conditioning_dataloader(data_path, samples_to_generate, batch_size)
             
-            # Sample new sequences conditioned on labels
-            print(f"Sampling sequences for iteration {iteration}...")
+            # Sample new sequences conditioned on test set labels
+            print(f"Sampling {samples_to_generate} sequences for iteration {iteration} using test set conditioning...")
             sampled_sequences, sampled_targets = self.sample_sequences_for_iteration(
-                model, graph, noise, dataloader, num_steps, show_progress=True
+                model, graph, noise, conditioning_dataloader, num_steps, show_progress=True
             )
             
             # Accumulate new samples
             self.accumulated_sequences.append(sampled_sequences)
             self.accumulated_targets.append(sampled_targets)
-            
-            # Compose current dataset (original 25% + all accumulated generated sequences)
+
+            # Compose current dataset (original baseline + all accumulated generated sequences)
             subset_sequences_onehot = F.one_hot(subset_sequences.long(), num_classes=4).float()
             all_sequences = [subset_sequences_onehot] + self.accumulated_sequences
             all_targets = [subset_targets] + self.accumulated_targets
             current_sequences = torch.cat(all_sequences, dim=0)
             current_targets = torch.cat(all_targets, dim=0)
             
-            # Enforce exact aggregated dataset sizes for each iteration
+            # Verify we hit the expected target size
             desired_total = target_sizes.get(iteration, current_sequences.shape[0])
+            if abs(current_sequences.shape[0] - desired_total) > 10:  # Allow small tolerance
+                print(f"Warning: iteration {iteration} has {current_sequences.shape[0]} samples, expected {desired_total}")
+            # Trim to exact size if needed
             if current_sequences.shape[0] > desired_total:
                 current_sequences = current_sequences[:desired_total]
                 current_targets = current_targets[:desired_total]
-            elif current_sequences.shape[0] < desired_total:
-                print(f"Warning: iteration {iteration} has {current_sequences.shape[0]} samples, less than expected {desired_total}")
             
             total_size = len(current_sequences)
             generated_size = total_size - subset_size
@@ -1325,14 +1446,15 @@ def main():
     parser.add_argument('--data_path', required=True, help='Path to subset data file (25% of DeepSTARR)')
     parser.add_argument('--output_dir', required=True, help='Directory to save iteration datasets and oracles')
     parser.add_argument('--config', help='Path to config file (optional)')
-    parser.add_argument('--max_iterations', type=int, default=6, help='Maximum iterations (default: 3)')
+    parser.add_argument('--max_iterations', type=int, default=6, help='Maximum iterations (default: 6)')
     parser.add_argument('--num_steps', type=int, help='Sampling steps (default: sequence length)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size (default: 32)')
     parser.add_argument('--architecture', choices=['transformer', 'convolutional'], 
                        default='transformer', help='Model architecture')
     parser.add_argument('--seed', type=int, default=42, help='Global seed for reproducibility')
-    parser.add_argument('--num_oracle_models', type=int, default=5, help='Number of oracle models to train per condition (default: 5)')
+    parser.add_argument('--num_oracle_models', type=int, default=3, help='Number of oracle models to train per condition (default: 3)')
     parser.add_argument('--use_evoaug', action='store_true', help='Enable EvoAug for training')
+    parser.add_argument('--class_balance', action='store_true', help='Balance conditioning labels across 4 classes (hi/lo combinations)')
     
     args = parser.parse_args()
     
@@ -1352,7 +1474,7 @@ def main():
     set_global_seed(int(args.seed))
     
     # Create sampler and run experiment
-    sampler = DeepSTARRIterativeAugmentationSampler(config, seed=int(args.seed), use_evoaug=args.use_evoaug)
+    sampler = DeepSTARRIterativeAugmentationSampler(config, seed=int(args.seed), use_evoaug=args.use_evoaug, class_balance=args.class_balance)
     
     try:
         results = sampler.run_iterative_augmentation_experiment(
