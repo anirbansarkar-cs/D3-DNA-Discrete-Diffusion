@@ -29,7 +29,7 @@ def sample_lentimpra_sequences(
         checkpoint_path: Path to trained model checkpoint
         config_path: Path to model config file
         num_samples: Number of sequences to generate
-        labels: Optional conditioning labels (num_samples, 1). If None, uses random labels.
+        labels: Optional conditioning labels (num_samples, signal_dim). If None, uses random labels.
         architecture: Model architecture ('transformer' or 'convolutional')
         sampling_steps: Number of diffusion steps (default: 230, sequence length)
         device: Device to run on ('cuda' or 'cpu')
@@ -61,7 +61,8 @@ def sample_lentimpra_sequences(
     # Generate or validate labels
     if labels is None:
         # Random regulatory activity values
-        labels = torch.randn(num_samples, 1, device=device)
+        signal_dim = config.dataset.get('signal_dim', 1)
+        labels = torch.randn(num_samples, signal_dim, device=device)
     else:
         if labels.shape[0] != num_samples:
             raise ValueError(f"labels.shape[0] ({labels.shape[0]}) must match num_samples ({num_samples})")
