@@ -11,6 +11,8 @@ import torch
 import h5py
 from omegaconf import OmegaConf
 from typing import Optional
+import numpy as np
+
 from model_zoo.lentimpra.models import load_trained_model
 from scripts import sampling
 
@@ -129,7 +131,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for sampling')
     parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'],
                         help='Device to run on')
-    parser.add_argument('--samples', type=str, help='Optional output HDF5 file to save sequences (.h5)')
+    parser.add_argument('--output', type=str, help='Optional output HDF5 file to save sequences (.h5)')
 
     args = parser.parse_args()
 
@@ -156,15 +158,15 @@ def main():
     print(f"Sample sequence (first 50 positions): {sequences[0, :50]}")
 
     # Save if requested
-    if args.samples:
+    if args.output:
         # Create output directory if it doesn't exist
-        output_dir = os.path.dirname(args.samples)
+        output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
         # Write HDF5 file
-        with h5py.File(args.samples, 'w') as f:
+        with h5py.File(args.output, 'w') as f:
             f.create_dataset('sequences', data=sequences.cpu().numpy(), compression='gzip', compression_opts=4)
-        print(f"Saved HDF5 sequences to {args.samples}")
+        print(f"Saved HDF5 sequences to {args.output}")
 
 
 if __name__ == '__main__':
