@@ -9,8 +9,8 @@ import argparse
 import os
 import torch
 import h5py
-from omegaconf import OmegaConf
-from typing import Optional
+from omegaconf import OmegaConf, DictConfig
+from typing import Optional, cast
 import numpy as np
 
 from model_zoo.lentimpra.models import load_trained_model
@@ -51,17 +51,17 @@ def sample_lentimpra_sequences(
         >>> print(sequences.shape)  # (100, 230)
     """
     # Load config
-    config = OmegaConf.load(config_path)
+    config = cast(DictConfig, OmegaConf.load(config_path))
 
-    # Set device
-    device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    # Set device (torch)
+    torch_device = torch.device(device if torch.cuda.is_available() else 'cpu')
 
     # Load trained model
     model, graph, noise = load_trained_model(
         checkpoint_path,
         config,
         architecture,
-        device=str(device)
+        device=str(torch_device)
     )
     model.eval()
 
@@ -69,13 +69,13 @@ def sample_lentimpra_sequences(
     if labels is None:
         # Random regulatory activity values
         signal_dim = config.dataset.get('signal_dim', 1)
-        labels = torch.randn(num_samples, signal_dim, device=device)
+        labels = torch.randn(num_samples, signal_dim, device=torch_device)
     else:
         if labels.shape[0] != num_samples:
             raise ValueError(f"labels.shape[0] ({labels.shape[0]}) must match num_samples ({num_samples})")
         if labels.dim() == 1:
             labels = labels.unsqueeze(1)
-        labels = labels.to(device)
+        labels = labels.to(torch_device)
 
     # Sample in batches to avoid memory issues with flash attention
     seq_length = 230  # LentIMPRA sequence length
@@ -98,7 +98,7 @@ def sample_lentimpra_sequences(
             (current_batch_size, seq_length),
             'analytic',  # Predictor type
             sampling_steps,
-            device=device
+            device=torch_device
         )
 
         # Generate sequences for this batch
@@ -132,16 +132,17 @@ def main():
     parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'],
                         help='Device to run on')
     parser.add_argument('--output', type=str, help='Optional output HDF5 file to save sequences (.h5)')
+    parser.add_argument('--onehot', action='store_true', help='Also save one-hot encoded sequences in the HDF5 file')
 
     args = parser.parse_args()
 
-    # Set device
-    device = args.device if torch.cuda.is_available() else 'cpu'
+    # Set device (string)
+    device_str = args.device if torch.cuda.is_available() else 'cpu'
     if args.device == 'cuda' and not torch.cuda.is_available():
         print(f"Warning: CUDA requested but not available, using CPU")
 
     print(f"Sampling {args.num_samples} sequences from {args.checkpoint}")
-    print(f"Device: {device}")
+    print(f"Device: {device_str}")
 
     # Generate sequences
     sequences = sample_lentimpra_sequences(
@@ -150,7 +151,7 @@ def main():
         num_samples=args.num_samples,
         architecture=args.architecture,
         sampling_steps=args.steps,
-        device=device,
+        device=device_str,
         batch_size=args.batch_size
     )
 
@@ -165,7 +166,15 @@ def main():
             os.makedirs(output_dir)
         # Write HDF5 file
         with h5py.File(args.output, 'w') as f:
+            # Always save indexed sequences
             f.create_dataset('sequences', data=sequences.cpu().numpy(), compression='gzip', compression_opts=4)
+            if args.onehot:
+                # Convert to one-hot (N, L, 4) and save
+                onehot = torch.nn.functional.one_hot(sequences.long(), num_classes=4).to(torch.uint8)
+                f.create_dataset('sequences_onehot', data=onehot.cpu().numpy(), compression='gzip', compression_opts=4)
+                # Save vocab mapping as ASCII strings
+                dt = h5py.string_dtype(encoding='ascii', length=1)
+                f.create_dataset('vocab_mapping', data=np.array(['A','C','G','T'], dtype=dt))
         print(f"Saved HDF5 sequences to {args.output}")
 
 
