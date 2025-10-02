@@ -6,6 +6,7 @@ Based on model_zoo/lentimpra/sp_mse_callback.py
 """
 
 import argparse
+import os
 import torch
 from omegaconf import OmegaConf
 from typing import Optional
@@ -153,6 +154,11 @@ def main():
 
     # Save if requested
     if args.output:
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(args.output)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
         torch.save(sequences, args.output)
         print(f"Saved sequences to {args.output}")
 
