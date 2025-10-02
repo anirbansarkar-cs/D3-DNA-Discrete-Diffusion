@@ -27,6 +27,20 @@ class LentIMPRATransformerModel(TransformerModel):
         
         super().__init__(config)
 
+class LentIMPRATransformerModelMultiClass(TransformerModel):
+    """LentIMPRA-specific transformer model wrapper for multi-class classification."""
+    
+    def __init__(self, config: DictConfig):
+        # Ensure dataset-specific config is set
+        if not hasattr(config, 'dataset'):
+            config.dataset = {}
+        config.dataset.name = 'lentimpra'
+        config.dataset.signal_dim = 3  # Single regression target
+        config.dataset.num_classes = 4
+        config.dataset.sequence_length = 230
+
+        super().__init__(config)
+
 
 class LentIMPRAConvolutionalModel(ConvolutionalModel):
     """LentIMPRA-specific convolutional model wrapper."""
@@ -138,6 +152,8 @@ def load_trained_model(checkpoint_path: str, config: DictConfig, architecture: s
         model = LentIMPRATransformerModel(config)
     elif architecture.lower() == 'convolutional':
         model = LentIMPRAConvolutionalModel(config)
+    elif architecture.lower() == 'transformer_multi_class':
+        model = LentIMPRATransformerModelMultiClass(config)
     else:
         raise ValueError(f"Unsupported architecture: {architecture}")
     

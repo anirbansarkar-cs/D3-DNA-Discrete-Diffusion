@@ -94,11 +94,11 @@ def main():
         description='Sample sequences from a trained LentIMPRA diffusion model',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument('checkpoint', type=str, help='Path to model checkpoint')
-    parser.add_argument('config', type=str, help='Path to config file')
+    parser.add_argument('--checkpoint', type=str, help='Path to model checkpoint')
+    parser.add_argument('--config', type=str, help='Path to config file')
     parser.add_argument('--num-samples', type=int, default=10, help='Number of sequences to generate')
     parser.add_argument('--architecture', type=str, default='transformer',
-                        choices=['transformer', 'convolutional'], help='Model architecture')
+                        choices=['transformer', 'convolutional', 'transformer_multi_class'], help='Model architecture')
     parser.add_argument('--steps', type=int, default=230, help='Number of sampling steps')
     parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'],
                         help='Device to run on')
