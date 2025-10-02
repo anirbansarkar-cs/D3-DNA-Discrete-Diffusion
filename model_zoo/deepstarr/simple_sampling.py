@@ -311,7 +311,7 @@ def generate_multiple_sets(model_checkpoint: str,
             'conditioning_source': 'template' if conditioning_labels_template is not None else 'random'
         })
 
-        save_sequences_h5(sequences_onehot, labels, set_path, set_metadata, set_index=i)
+        save_sequences_h5(sequences_onehot, labels, set_path, set_metadata)
         output_paths.append(set_path)
 
         print(f"✓ Set {i+1} saved: {set_filename}")
