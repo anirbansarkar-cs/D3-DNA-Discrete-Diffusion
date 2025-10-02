@@ -20,7 +20,8 @@ def sample_lentimpra_sequences(
     labels: Optional[torch.Tensor] = None,
     architecture: str = 'transformer',
     sampling_steps: int = 230,
-    device: str = 'cuda'
+    device: str = 'cuda',
+    batch_size: int = 256
 ) -> torch.Tensor:
     """
     Sample sequences from a trained LentIMPRA model.
@@ -33,6 +34,7 @@ def sample_lentimpra_sequences(
         architecture: Model architecture ('transformer' or 'convolutional')
         sampling_steps: Number of diffusion steps (default: 230, sequence length)
         device: Device to run on ('cuda' or 'cpu')
+        batch_size: Batch size for sampling (default: 256)
 
     Returns:
         Generated sequences as indices (num_samples, 230)
@@ -70,20 +72,40 @@ def sample_lentimpra_sequences(
             labels = labels.unsqueeze(1)
         labels = labels.to(device)
 
-    # Create sampling function
+    # Sample in batches to avoid memory issues with flash attention
     seq_length = 230  # LentIMPRA sequence length
-    sampling_fn = sampling.get_pc_sampler(
-        graph,
-        noise,
-        (num_samples, seq_length),
-        'analytic',  # Predictor type
-        sampling_steps,
-        device=device
-    )
+    all_sequences = []
 
-    # Generate sequences
-    with torch.no_grad():
-        sequences = sampling_fn(model, labels)
+    num_batches = (num_samples + batch_size - 1) // batch_size
+
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, num_samples)
+        current_batch_size = end_idx - start_idx
+
+        # Get labels for this batch
+        batch_labels = labels[start_idx:end_idx]
+
+        # Create sampling function for this batch
+        sampling_fn = sampling.get_pc_sampler(
+            graph,
+            noise,
+            (current_batch_size, seq_length),
+            'analytic',  # Predictor type
+            sampling_steps,
+            device=device
+        )
+
+        # Generate sequences for this batch
+        with torch.no_grad():
+            batch_sequences = sampling_fn(model, batch_labels)
+
+        all_sequences.append(batch_sequences)
+
+        print(f"Completed batch {i+1}/{num_batches} ({end_idx}/{num_samples} sequences)")
+
+    # Concatenate all batches
+    sequences = torch.cat(all_sequences, dim=0)
 
     return sequences
 
@@ -100,9 +122,10 @@ def main():
     parser.add_argument('--architecture', type=str, default='transformer',
                         choices=['transformer', 'convolutional', 'transformer_multi_class'], help='Model architecture')
     parser.add_argument('--steps', type=int, default=230, help='Number of sampling steps')
+    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for sampling')
     parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'],
                         help='Device to run on')
-    parser.add_argument('--output', type=str, help='Optional output file to save sequences (.pt)')
+    parser.add_argument('--output', type=str, help='Optional output file to save sequences (.pt or .h5)')
 
     args = parser.parse_args()
 
@@ -121,7 +144,8 @@ def main():
         num_samples=args.num_samples,
         architecture=args.architecture,
         sampling_steps=args.steps,
-        device=device
+        device=device,
+        batch_size=args.batch_size
     )
 
     print(f"Generated sequences shape: {sequences.shape}")

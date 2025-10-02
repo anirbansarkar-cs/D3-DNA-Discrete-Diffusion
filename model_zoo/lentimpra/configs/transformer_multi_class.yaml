@@ -3,7 +3,7 @@ dataset:
   name: lentimpra
   sequence_length: 230
   num_classes: 4
-  signal_dim: 3 # Single regression target
+  signal_dim: 3  # Multi-class with 3 signal dimensions
 
 # Hardware configuration
 ngpus: 2

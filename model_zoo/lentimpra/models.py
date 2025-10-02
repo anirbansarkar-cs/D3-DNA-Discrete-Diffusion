@@ -29,15 +29,12 @@ class LentIMPRATransformerModel(TransformerModel):
 
 class LentIMPRATransformerModelMultiClass(TransformerModel):
     """LentIMPRA-specific transformer model wrapper for multi-class classification."""
-    
+
     def __init__(self, config: DictConfig):
-        # Ensure dataset-specific config is set
+        # Use config values directly - don't override
+        # Config should specify signal_dim=3 for multi-class
         if not hasattr(config, 'dataset'):
-            config.dataset = {}
-        config.dataset.name = 'lentimpra'
-        config.dataset.signal_dim = 3  # Single regression target
-        config.dataset.num_classes = 4
-        config.dataset.sequence_length = 230
+            raise ValueError("Config must have 'dataset' section with signal_dim, num_classes, and sequence_length")
 
         super().__init__(config)
 
