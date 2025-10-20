@@ -841,7 +841,7 @@ class DeepSTARRIterativeAugmentationSampler:
             )
 
             # Keep everything on GPU during sampling
-            with torch.amp.autocast('cuda', enabled=True, dtype=torch.bfloat16):
+            with torch.amp.autocast('cuda', enabled=True, dtype=torch.float16):
                 sample = sampling_fn(model, batch_targets)
 
             # Convert to one-hot on GPU
