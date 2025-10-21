@@ -544,8 +544,17 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
                 config.d3_checkpoint, d3_config, config.architecture, str(device)
             )
         elif config.model == 'lentimpra':
+            # For LentiMPRA, check if we need the multi-class architecture
+            # by looking at the signal_dim in the config
+            signal_dim = d3_config.dataset.get('signal_dim', 1)
+            architecture = config.architecture
+
+            # If signal_dim > 1, use transformer_multi_class architecture
+            if signal_dim > 1 and architecture == 'transformer':
+                architecture = 'transformer_multi_class'
+
             d3_model, graph, noise = load_lentimpra_model(
-                config.d3_checkpoint, d3_config, config.architecture, str(device)
+                config.d3_checkpoint, d3_config, architecture, str(device)
             )
         else:
             raise ValueError(f"Unknown model: {config.model}")
@@ -718,7 +727,7 @@ Note: Use SLURM job arrays to run multiple tuples in parallel.
                        help='Number of sampling steps (default: sequence length)')
     parser.add_argument('--batch_size', type=int, default=128,
                        help='Batch size for sampling and prediction (default: 128)')
-    parser.add_argument('--architecture', choices=['transformer', 'convolutional'],
+    parser.add_argument('--architecture', choices=['transformer', 'convolutional', 'transformer_multi_class'],
                        default='transformer', help='D3 model architecture (default: transformer)')
     parser.add_argument('--device', default='cuda', choices=['cuda', 'cpu'],
                        help='Device to use (default: cuda)')
