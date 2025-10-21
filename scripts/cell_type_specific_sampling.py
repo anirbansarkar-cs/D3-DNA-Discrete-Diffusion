@@ -552,17 +552,8 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
 
         d3_model.eval()
 
-        # Load oracle model
-        print("\n[2/3] Loading oracle model...")
-        if config.model == 'deepstarr':
-            oracle_model = load_deepstarr_oracle(config.oracle_checkpoint, str(device))
-        elif config.model == 'lentimpra':
-            oracle_model = load_lentimpra_oracle(
-                config.oracle_checkpoint, config.config_path, str(device)
-            )
-
         # Sample sequences
-        print(f"\n[3/3] Sampling sequences for activity tuple: {activity_tuple}")
+        print(f"\n[2/3] Sampling sequences for activity tuple: {activity_tuple}")
         if config.model == 'deepstarr':
             sequences_onehot, conditioning_labels = sample_deepstarr_sequences(
                 d3_model, graph, noise, activity_tuple,
@@ -576,21 +567,10 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
                 config.batch_size, device
             )
 
-    # Predict activities with oracle
-    print(f"\nPredicting activities with oracle model...")
-    if config.model == 'deepstarr':
-        oracle_predictions = predict_with_deepstarr_oracle(
-            oracle_model, sequences_onehot, config.batch_size, device
-        )
-    elif config.model == 'lentimpra':
-        oracle_predictions = predict_with_lentimpra_oracle(
-            oracle_model, sequences_onehot, config.batch_size, device
-        )
-
     # Save results for this tuple
     tuple_output_file = output_dir / f"tuple_{tuple_idx}_samples.h5"
 
-    print(f"  Saving results to: {tuple_output_file}")
+    print(f"  Saving samples to: {tuple_output_file}")
     with h5py.File(tuple_output_file, 'w') as f:
         # Save sequences (both one-hot and indices)
         f.create_dataset('sequences_onehot', data=sequences_onehot.numpy(),
@@ -604,9 +584,6 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
         # Save conditioning labels (target activities)
         f.create_dataset('conditioning_labels', data=conditioning_labels.numpy())
 
-        # Save oracle predictions
-        f.create_dataset('oracle_predictions', data=oracle_predictions.numpy())
-
         # Metadata
         f.attrs['activity_tuple'] = activity_tuple
         f.attrs['tuple_index'] = tuple_idx
@@ -618,6 +595,22 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
         f.attrs['used_preexisting_samples'] = samples_file is not None
         if samples_file is not None:
             f.attrs['source_samples_file'] = samples_file
+
+    # Predict activities with oracle
+    print(f"\nPredicting activities with oracle model...")
+    if config.model == 'deepstarr':
+        oracle_predictions = predict_with_deepstarr_oracle(
+            oracle_model, sequences_onehot, config.batch_size, device
+        )
+    elif config.model == 'lentimpra':
+        oracle_predictions = predict_with_lentimpra_oracle(
+            oracle_model, sequences_onehot, config.batch_size, device
+        )
+
+    print(f"  Saving activity predictions to: {tuple_output_file}")
+    with h5py.File(tuple_output_file, 'a') as f:
+        # Save oracle predictions
+        f.create_dataset('oracle_predictions', data=oracle_predictions.numpy())
 
     # Compute statistics
     mean_prediction = oracle_predictions.mean(dim=0).numpy()
