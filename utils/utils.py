@@ -46,7 +46,7 @@ def get_score_fn(model, train=False, sampling=False):
     model_fn = get_model_fn(model, train=train)
 
     def score_fn(x, sigma, labels=None):
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+        with torch.amp.autocast('cuda', dtype=torch.float16):
             sigma = sigma.reshape(-1)
             model_output = model_fn(x, sigma, labels)
             
