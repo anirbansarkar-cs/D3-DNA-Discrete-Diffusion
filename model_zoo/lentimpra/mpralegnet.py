@@ -8,7 +8,7 @@ Combines model architecture, data loading, training, and prediction functionalit
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import lightning.pytorch as pl
+import pytorch_lightning as pl
 from torchmetrics import PearsonCorrCoef
 from torch.utils.data import Dataset, DataLoader
 import json
@@ -20,7 +20,7 @@ import h5py
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Union, Tuple
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 import tqdm
 
 
