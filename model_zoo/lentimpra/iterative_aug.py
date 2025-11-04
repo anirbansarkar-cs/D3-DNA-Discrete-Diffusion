@@ -619,6 +619,19 @@ class LentIMPRAIterativeAugmentationSampler:
                 test_dataset = self._get_dataset_split(data_file, 'test')
                 test_sequences, test_targets = self._extract_sequences_targets(test_dataset)
 
+        # Ensure targets are 2D (N, signal_dim) before any operations
+        if test_targets.dim() == 1:
+            test_targets = test_targets.unsqueeze(-1)
+
+        # Handle edge case: if target_size is 0, return empty dataloader
+        if target_size <= 0:
+            print(f"Warning: target_size={target_size}, creating empty dataloader")
+            dummy_sequences = torch.zeros(0, self.sequence_length, 4)
+            sampled_targets = torch.zeros(0, test_targets.shape[-1])
+            dataset = TensorDataset(dummy_sequences, sampled_targets)
+            return DataLoader(dataset, batch_size=batch_size, shuffle=False,
+                            num_workers=0, pin_memory=False)
+
         # Use test targets, but repeat/sample to meet target size
         if len(test_targets) >= target_size:
             # Sample subset
@@ -629,10 +642,6 @@ class LentIMPRAIterativeAugmentationSampler:
             repeats = (target_size + len(test_targets) - 1) // len(test_targets)
             repeated_targets = test_targets.repeat(repeats, 1)  # Repeat along batch dimension
             sampled_targets = repeated_targets[:target_size]
-
-        # Ensure targets are (N, 3) for multi-class (k562, hepg2, wtc11)
-        if sampled_targets.dim() == 1:
-            sampled_targets = sampled_targets.unsqueeze(-1)
 
         # Create dummy sequences matching the actual number of targets
         actual_target_size = len(sampled_targets)
@@ -683,6 +692,12 @@ class LentIMPRAIterativeAugmentationSampler:
         all_conditioning_targets = []
         for _, (_, targets) in enumerate(conditioning_dataloader):
             all_conditioning_targets.append(targets)
+
+        # Handle empty dataloader
+        if not all_conditioning_targets:
+            print("Warning: No conditioning targets found in dataloader. Returning empty results.")
+            return torch.zeros(0, self.sequence_length, 4), torch.zeros(0, 3)
+
         all_conditioning_targets = torch.cat(all_conditioning_targets, dim=0).to(self.device)
 
         total_samples = len(all_conditioning_targets)
