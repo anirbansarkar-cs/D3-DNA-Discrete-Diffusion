@@ -43,6 +43,7 @@ try:
         RandomDeletion, RandomRC, RandomInsertion,
         RandomTranslocation, RandomMutation, RandomNoise
     )
+    from evoaug.evoaug import RobustLoader
     EVOAUG_AVAILABLE = True
 except Exception:
     EVOAUG_AVAILABLE = False
@@ -349,7 +350,7 @@ class PL_DeepSTARR(pl.LightningModule):
         return torch.cat(preds_list, dim=0)
 
 
-def training_with_PL(dataset_path: str, 
+def training_with_PL(dataset_path: str,
                      train_max_epochs: int = 100,
                      batch_size: int = 128,
                      patience: int = 10,
@@ -359,7 +360,10 @@ def training_with_PL(dataset_path: str,
                      filename: Optional[str] = None,
                      use_evoaug: bool = False) -> Dict[str, Any]:
     """Train DeepSTARR model using PyTorch Lightning.
-    
+
+    For every oracle model trained, the dataloader used should come from RobustLoader
+    (only for the train set, not validation set) when use_evoaug is True.
+
     Args:
         dataset_path: Path to H5 file containing training data
         train_max_epochs: Maximum training epochs
@@ -369,8 +373,8 @@ def training_with_PL(dataset_path: str,
         seed: Random seed
         out_dir: Directory to save checkpoints
         filename: Base filename (without extension) for the checkpoint
-        use_evoaug: If True, enable EvoAug with a hardcoded augmentation list
-        
+        use_evoaug: If True, enable EvoAug with RobustLoader for training
+
     Returns:
         Dictionary containing trained model and metrics
     """
@@ -403,26 +407,17 @@ def training_with_PL(dataset_path: str,
                 X_train = X_train[train_indices]
                 Y_train = Y_train[train_indices]
         
-        # If EvoAug, ensure inputs are (B, 4, L) one-hot; else use current logic
-        if use_evoaug:
-            if X_train.dim() == 2:  # (N, L) indices format
-                X_train = F.one_hot(X_train.long(), num_classes=4).float().permute(0, 2, 1)
-                X_val = F.one_hot(X_val.long(), num_classes=4).float().permute(0, 2, 1)
-            elif X_train.dim() == 3 and X_train.shape[-1] == 4:  # (N, L, 4)
-                X_train = X_train.permute(0, 2, 1)
-                X_val = X_val.permute(0, 2, 1)
-            elif X_train.dim() == 3 and X_train.shape[1] == 4:  # already (N, 4, L)
-                pass
-            else:
-                raise ValueError(f"Unexpected X_train shape for EvoAug: {X_train.shape}")
+        # Convert to (N, 4, L) one-hot format for DeepSTARR model
+        if X_train.dim() == 2:  # (N, L) indices format
+            X_train = F.one_hot(X_train.long(), num_classes=4).float().permute(0, 2, 1)
+            X_val = F.one_hot(X_val.long(), num_classes=4).float().permute(0, 2, 1)
+        elif X_train.dim() == 3 and X_train.shape[-1] == 4:  # (N, L, 4) format
+            X_train = X_train.permute(0, 2, 1)  # Convert to (N, 4, L)
+            X_val = X_val.permute(0, 2, 1)
+        elif X_train.dim() == 3 and X_train.shape[1] == 4:  # already (N, 4, L)
+            pass
         else:
-            # Standard: convert to (N, 4, L) if needed for conv model
-            if X_train.dim() == 2:  # (N, L) indices format
-                X_train = F.one_hot(X_train.long(), num_classes=4).float().permute(0, 2, 1)
-                X_val = F.one_hot(X_val.long(), num_classes=4).float().permute(0, 2, 1)
-            elif X_train.dim() == 3 and X_train.shape[-1] == 4:  # (N, L, 4) format
-                X_train = X_train.permute(0, 2, 1)  # Convert to (N, 4, L)
-                X_val = X_val.permute(0, 2, 1)
+            raise ValueError(f"Unexpected X_train shape: {X_train.shape}")
         
         if verbose:
             print(f"Training data shape: {X_train.shape}")
@@ -438,86 +433,60 @@ def training_with_PL(dataset_path: str,
             patience=patience
         )
         
-        # Setup data loaders with reduced num_workers for large datasets
-        # num_workers = 0 if len(X_train) > 500000 else 2  # Reduce workers for large datasets
+        # Setup data loaders
         num_workers = 4
-        
-        if use_evoaug and EVOAUG_AVAILABLE:
-            # Hardcoded augmentation list similar to data.py
-            augment_list = [
-                RandomTranslocation(shift_min=0, shift_max=25),
-                RandomRC(rc_prob=0.0),
-                RandomMutation(),
-                RandomDeletion(delete_min=0, delete_max=20),
-            ]
-            # Build base datasets (one-hot tensors)
-            train_base = TensorDataset(X_train, Y_train)
-            val_base = TensorDataset(X_val, Y_val)
-            
-            # Import RobustLoader lazily to avoid linter/type issues
-            try:
-                from evoaug.evoaug import RobustLoader  # type: ignore
-            except Exception as e:
-                print(f"Warning: EvoAug RobustLoader unavailable: {e}. Falling back to standard dataloaders.")
-                EVOAUG_AVAILABLE_LOCAL = False
-            else:
-                EVOAUG_AVAILABLE_LOCAL = True
 
-            if EVOAUG_AVAILABLE_LOCAL:
-                train_dataloader = RobustLoader(
-                    base_dataset=train_base,
-                    augment_list=augment_list,
-                    max_augs_per_seq=2,
-                    hard_aug=True,
-                    batch_size=batch_size,
-                    sampler=None,
-                    num_workers=num_workers,
-                    pin_memory=True,
-                    shuffle=True,
-                )
-                val_dataloader = RobustLoader(
-                    base_dataset=val_base,
-                    augment_list=augment_list,
-                    max_augs_per_seq=2,
-                    hard_aug=True,
-                    batch_size=batch_size,
-                    sampler=None,
-                    num_workers=num_workers,
-                    pin_memory=True,
-                    shuffle=False,
-                )
-                # Disable augmentations for validation
-                val_dataloader.disable_augmentations()
-            else:
-                train_dataloader = DataLoader(
-                    TensorDataset(X_train, Y_train), 
-                    batch_size=batch_size, 
-                    shuffle=True,
-                    num_workers=num_workers,
-                    pin_memory=True,
-                    drop_last=True
-                )
-                val_dataloader = DataLoader(
-                    TensorDataset(X_val, Y_val), 
-                    batch_size=batch_size, 
-                    shuffle=False,
-                    num_workers=num_workers,
-                    pin_memory=True
-                )
+        # Create base datasets
+        train_dataset = TensorDataset(X_train, Y_train)
+        val_dataset = TensorDataset(X_val, Y_val)
+
+        # Use EvoAug RobustLoader for training if requested and available
+        if use_evoaug and EVOAUG_AVAILABLE:
+            # Augmentation list matching data.py (lines 143-150)
+            augment_list = [
+                RandomDeletion(delete_min=0, delete_max=20),
+                RandomTranslocation(shift_min=0, shift_max=20),
+                RandomMutation(mut_frac=0.05),
+                RandomNoise(noise_mean=0, noise_std=0.2),
+            ]
+
+            # Training loader with RobustLoader
+            train_dataloader = RobustLoader(
+                base_dataset=train_dataset,
+                augment_list=augment_list,
+                max_augs_per_seq=2,
+                hard_aug=True,
+                batch_size=batch_size,
+                sampler=None,
+                num_workers=num_workers,
+                pin_memory=True,
+                shuffle=True,
+            )
+
+            # Validation loader: standard DataLoader (no augmentation)
+            val_dataloader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True
+            )
         else:
             if use_evoaug and not EVOAUG_AVAILABLE:
                 print("Warning: EvoAug requested but not available. Falling back to standard dataloaders.")
+
+            # Standard DataLoaders
             train_dataloader = DataLoader(
-                TensorDataset(X_train, Y_train), 
-                batch_size=batch_size, 
+                train_dataset,
+                batch_size=batch_size,
                 shuffle=True,
                 num_workers=num_workers,
                 pin_memory=True,
                 drop_last=True
             )
             val_dataloader = DataLoader(
-                TensorDataset(X_val, Y_val), 
-                batch_size=batch_size, 
+                val_dataset,
+                batch_size=batch_size,
                 shuffle=False,
                 num_workers=num_workers,
                 pin_memory=True
@@ -560,7 +529,7 @@ def training_with_PL(dataset_path: str,
         # Train
         trainer.fit(model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
 
-        # finetune on the original data without augmentations
+        # Finetune on the original data without augmentations
         # Build non-augmented dataloaders for finetuning
         finetune_train_loader = DataLoader(
             TensorDataset(X_train, Y_train),
@@ -605,15 +574,15 @@ def training_with_PL(dataset_path: str,
         )
         finetune_trainer.fit(model, train_dataloaders=finetune_train_loader, val_dataloaders=finetune_val_loader)
 
-        # Clean up checkpoint filename
-        old_path = os.path.join(ckpt_dir, f"{ckptfile}-v1.ckpt")
-        new_path = os.path.join(ckpt_dir, f"{ckptfile}.ckpt")
-        if os.path.exists(old_path):
-            os.rename(old_path, new_path)
-        
+        # Get checkpoint path
+        checkpoint_path = finetune_ckpt.best_model_path
+        if not checkpoint_path or not os.path.exists(checkpoint_path):
+            # Fallback to expected path
+            checkpoint_path = os.path.join(ckpt_dir, f"{ckptfile}.ckpt")
+
         return {
             "model": model,
-            "checkpoint": new_path if os.path.exists(new_path) else None,
+            "checkpoint": checkpoint_path if os.path.exists(checkpoint_path) else None,
             "trainer": trainer,
             "success": True
         }
@@ -841,8 +810,8 @@ class DeepSTARRIterativeAugmentationSampler:
             )
 
             # Keep everything on GPU during sampling
-            with torch.amp.autocast('cuda', enabled=True, dtype=torch.float16):
-                sample = sampling_fn(model, batch_targets)
+            # Note: Autocast disabled to avoid bfloat16/float16 compatibility issues
+            sample = sampling_fn(model, batch_targets)
 
             # Convert to one-hot on GPU
             seq_pred_one_hot = F.one_hot(sample, num_classes=4).float()

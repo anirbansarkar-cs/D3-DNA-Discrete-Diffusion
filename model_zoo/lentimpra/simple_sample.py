@@ -6,6 +6,7 @@ Based on model_zoo/lentimpra/sp_mse_callback.py
 """
 
 import argparse
+from cgi import test
 import os
 import torch
 import h5py
@@ -26,7 +27,10 @@ def sample_lentimpra_sequences(
     architecture: str = 'transformer',
     sampling_steps: int = 230,
     device: str = 'cuda',
-    batch_size: int = 256
+    batch_size: int = 256,
+    random: bool = False,
+    test: bool = True,
+    data: str = '/grid/koo/home/shared/d3/data/lentimpra/60k/dataset_3cells_230bp_cleaned.h5',
 ) -> torch.Tensor:
     """
     Sample sequences from a trained LentIMPRA model.
@@ -67,9 +71,15 @@ def sample_lentimpra_sequences(
 
     # Generate or validate labels
     if labels is None:
-        # Random regulatory activity values
-        signal_dim = config.dataset.get('signal_dim', 1)
-        labels = torch.randn(num_samples, signal_dim, device=torch_device)
+        if random:
+            # Random regulatory activity values
+            signal_dim = config.dataset.get('signal_dim', 1)
+            labels = torch.randn(num_samples, signal_dim, device=torch_device)
+        elif test:
+            with h5py.File(data, 'r') as f:
+                labels = torch.tensor(np.array(f['y_test']), dtype=torch.float32)
+        else:
+            raise NotImplementedError("no labels available but both random and test labels = False.")
     else:
         if labels.shape[0] != num_samples:
             raise ValueError(f"labels.shape[0] ({labels.shape[0]}) must match num_samples ({num_samples})")
@@ -133,6 +143,11 @@ def main():
                         help='Device to run on')
     parser.add_argument('--output', type=str, help='Optional output HDF5 file to save sequences (.h5)')
     parser.add_argument('--onehot', action='store_true', help='Also save one-hot encoded sequences in the HDF5 file')
+    parser.add_argument('--condition-random', action='store_false', help='Use randomly generated conditions (activity labels)')
+    parser.add_argument('--condition-test', action='store_true', help='Use conditions from the test set')
+    parser.add_argument('--original-data', type=str, help='Path to dataset containing original test data')
+
+    #srun python model_zoo/lentimpra/simple_sample.py --checkpoint /grid/koo/home/duran/D3-DNA-Discrete-Diffusion/model_zoo/lentimpra60k/wtc_control/checkpoints/model-epoch=203-val_loss=239.8568.ckpt --config /grid/koo/home/duran/D3-DNA-Discrete-Diffusion/model_zoo/lentimpra/configs/transformer.yaml --num-samples 5599 --architecture transformer --output /grid/koo/home/duran/D3-DNA-Discrete-Diffusion/sampled_seqs/lentimpra_60k/230_steps_wtc11_only.h5 --original-data /grid/koo/home/shared/d3/data/lentimpra/lenti_MPRA_WTC11_renamed.h5
 
     args = parser.parse_args()
 
@@ -152,7 +167,10 @@ def main():
         architecture=args.architecture,
         sampling_steps=args.steps,
         device=device_str,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        random=args.condition_random,
+        test=args.condition_test,
+        data=args.original_data,
     )
 
     print(f"Generated sequences shape: {sequences.shape}")

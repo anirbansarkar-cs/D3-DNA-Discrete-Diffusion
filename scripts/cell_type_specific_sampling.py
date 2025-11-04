@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cell-Type-Specific Activity Prediction Experiment
+Cell-Type-Specific Activity Prediction Experiment with Multi-Oracle Support
 
 This script implements targeted sampling experiments for both DeepSTARR and LentiMPRA models.
 For each experiment, we:
@@ -8,8 +8,14 @@ For each experiment, we:
 2. Use oracle models to predict activities for the generated sequences
 3. Save sequences and oracle-predicted activities for analysis
 
-DeepSTARR: Activity tuple format (dev, hk)
+DeepSTARR: Activity tuple format (dev, hk) - single oracle with 2 outputs
 LentiMPRA: Activity tuple format (k562, hepg2, wtc11)
+           - Can use either single oracle with 3 outputs OR multi-oracle (3 separate models)
+
+NEW: Multi-Oracle Support
+- For LentiMPRA, you can now use 3 separate oracle models (one per cell type)
+- Specify --oracle_mode multi to use multi-oracle prediction
+- Provide 3 checkpoint paths: --oracle_checkpoint1, --oracle_checkpoint2, --oracle_checkpoint3
 """
 
 import os
@@ -17,7 +23,7 @@ import sys
 import argparse
 import json
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
@@ -47,8 +53,12 @@ class ExperimentConfig:
     experiment_name: str
     model: str  # 'deepstarr' or 'lentimpra'
     d3_checkpoint: str  # Path to D3 model checkpoint
-    oracle_checkpoint: str  # Path to oracle model checkpoint
-    config_path: str  # Path to D3 model config
+    oracle_checkpoint: str = None  # Path to single oracle model checkpoint
+    oracle_checkpoint1: str = None  # Path to first oracle (for multi-oracle)
+    oracle_checkpoint2: str = None  # Path to second oracle (for multi-oracle)
+    oracle_checkpoint3: str = None  # Path to third oracle (for multi-oracle)
+    oracle_mode: str = 'single'  # 'single' or 'multi'
+    config_path: str = None  # Path to D3 model config
     num_samples_per_tuple: int = 500
     num_steps: int = None  # Sampling steps (defaults to sequence length)
     batch_size: int = 128
@@ -181,11 +191,11 @@ def load_deepstarr_oracle(checkpoint_path: str, device: str = 'cuda') -> DeepSTA
 
 
 # =============================================================================
-# LentiMPRA Oracle Model Loading
+# LentiMPRA Oracle Model Loading (Single and Multi-Oracle)
 # =============================================================================
 
 def load_lentimpra_oracle(checkpoint_path: str, config_path: str, device: str = 'cuda'):
-    """Load LentiMPRA oracle model from checkpoint.
+    """Load LentiMPRA oracle model from checkpoint (single oracle with 3 outputs).
 
     Note: LentiMPRA uses MPRALegNet as the oracle model.
     This requires the mpralegnet.py implementation.
@@ -193,31 +203,101 @@ def load_lentimpra_oracle(checkpoint_path: str, config_path: str, device: str = 
     print(f"Loading LentiMPRA oracle from: {checkpoint_path}")
 
     try:
-        from model_zoo.lentimpra.mpralegnet import MPRALegNet
+        from model_zoo.lentimpra.mpralegnet import load_model, get_default_config, LitModel
+        import os
 
-        # Load configuration to get signal_dim
-        config = OmegaConf.load(config_path)
-        signal_dim = config.dataset.get('signal_dim', 3)  # Default 3 for K562, HepG2, WTC11
+        # Check if config file exists alongside checkpoint
+        oracle_dir = os.path.dirname(checkpoint_path)
+        oracle_config_path = os.path.join(oracle_dir, 'config.json')
 
-        # Create model
-        model = MPRALegNet(signal_dim=signal_dim, seq_length=230)
-        model.to(device)
-
-        # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-
-        # Handle different checkpoint formats
-        if 'state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['state_dict'], strict=False)
+        if os.path.exists(oracle_config_path):
+            # Load using existing load_model function
+            oracle, config = load_model(checkpoint_path, oracle_config_path)
+            oracle.eval()
+            print("✓ LentiMPRA oracle loaded successfully (with config)")
+            return oracle
         else:
-            model.load_state_dict(checkpoint, strict=False)
+            # Fallback: create default config and load checkpoint
+            print(f"Config file not found at {oracle_config_path}, using default config")
+            config = get_default_config()
+            oracle = LitModel(config)
 
-        model.eval()
-        print("✓ LentiMPRA oracle loaded successfully")
-        return model
+            # Load checkpoint weights
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            if 'state_dict' in checkpoint:
+                oracle.load_state_dict(checkpoint['state_dict'])
+            else:
+                oracle.load_state_dict(checkpoint)
+
+            oracle.eval()
+            print("✓ LentiMPRA oracle loaded successfully (with default config)")
+            return oracle
 
     except ImportError as e:
         print(f"Error loading LentiMPRA oracle: {e}")
+        print("Note: Ensure mpralegnet.py is available in model_zoo/lentimpra/")
+        raise
+
+
+def load_lentimpra_multi_oracle(
+    checkpoint_path1: str,
+    checkpoint_path2: str,
+    checkpoint_path3: str,
+    device: str = 'cuda'
+) -> Tuple[nn.Module, nn.Module, nn.Module]:
+    """
+    Load three separate MPRALegNet oracle models for multi-oracle setup.
+    Each model predicts activity for one cell type.
+
+    Args:
+        checkpoint_path1: Path to oracle for cell type 1 (K562)
+        checkpoint_path2: Path to oracle for cell type 2 (HepG2)
+        checkpoint_path3: Path to oracle for cell type 3 (WTC11)
+        device: Device to use
+
+    Returns:
+        Tuple of (oracle1, oracle2, oracle3)
+    """
+    print("Loading LentiMPRA multi-oracle models (3 separate MPRALegNet models)...")
+
+    try:
+        from model_zoo.lentimpra.mpralegnet import load_model, get_default_config, LitModel
+        import os
+
+        # Helper function to load a single oracle
+        def load_single_oracle(checkpoint_path):
+            oracle_dir = os.path.dirname(checkpoint_path)
+            oracle_config_path = os.path.join(oracle_dir, 'config.json')
+
+            if os.path.exists(oracle_config_path):
+                oracle, config = load_model(checkpoint_path, oracle_config_path)
+            else:
+                config = get_default_config()
+                oracle = LitModel(config)
+                checkpoint = torch.load(checkpoint_path, map_location='cpu')
+                if 'state_dict' in checkpoint:
+                    oracle.load_state_dict(checkpoint['state_dict'])
+                else:
+                    oracle.load_state_dict(checkpoint)
+
+            oracle.eval()
+            return oracle
+
+        # Load all three oracles
+        oracle1 = load_single_oracle(checkpoint_path1)
+        print(f"✓ Loaded oracle 1 (K562) from {checkpoint_path1}")
+
+        oracle2 = load_single_oracle(checkpoint_path2)
+        print(f"✓ Loaded oracle 2 (HepG2) from {checkpoint_path2}")
+
+        oracle3 = load_single_oracle(checkpoint_path3)
+        print(f"✓ Loaded oracle 3 (WTC11) from {checkpoint_path3}")
+
+        print("✓ All multi-oracle models loaded successfully")
+        return oracle1, oracle2, oracle3
+
+    except ImportError as e:
+        print(f"Error loading multi-oracle models: {e}")
         print("Note: Ensure mpralegnet.py is available in model_zoo/lentimpra/")
         raise
 
@@ -349,7 +429,7 @@ def sample_lentimpra_sequences(
 
 
 # =============================================================================
-# Oracle Prediction Functions
+# Oracle Prediction Functions (Single and Multi-Oracle)
 # =============================================================================
 
 def predict_with_deepstarr_oracle(
@@ -371,6 +451,7 @@ def predict_with_deepstarr_oracle(
         predictions: (N, 2) predicted activities [dev, hk]
     """
     oracle_model.eval()
+    oracle_model = oracle_model.to(device)
     predictions = []
 
     num_batches = (len(sequences_onehot) + batch_size - 1) // batch_size
@@ -384,10 +465,10 @@ def predict_with_deepstarr_oracle(
 
             # Get batch and convert to (B, 4, L) format for DeepSTARR
             batch_sequences = sequences_onehot[start_idx:end_idx]
-            batch_sequences = batch_sequences.permute(0, 2, 1).to(device)
+            sequences_input = batch_sequences.permute(0, 2, 1).to(device)
 
-            # Predict
-            batch_predictions = oracle_model(batch_sequences)
+            # Predict using predict_custom method
+            batch_predictions = oracle_model(sequences_input)
             predictions.append(batch_predictions.cpu())
 
     return torch.cat(predictions, dim=0)
@@ -400,7 +481,7 @@ def predict_with_lentimpra_oracle(
     device: torch.device
 ) -> torch.Tensor:
     """
-    Predict activities using LentiMPRA oracle model.
+    Predict activities using LentiMPRA oracle model (single oracle with 3 outputs).
 
     Args:
         oracle_model: LentiMPRA oracle model (MPRALegNet)
@@ -412,6 +493,7 @@ def predict_with_lentimpra_oracle(
         predictions: (N, 3) predicted activities [k562, hepg2, wtc11]
     """
     oracle_model.eval()
+    oracle_model = oracle_model.to(device)
     predictions = []
 
     num_batches = (len(sequences_onehot) + batch_size - 1) // batch_size
@@ -425,13 +507,89 @@ def predict_with_lentimpra_oracle(
 
             # Get batch and convert to (B, 4, L) format for LentiMPRA oracle
             batch_sequences = sequences_onehot[start_idx:end_idx]
-            batch_sequences = batch_sequences.permute(0, 2, 1).to(device)
+            sequences_input = batch_sequences.permute(0, 2, 1).to(device)
 
-            # Predict
-            batch_predictions = oracle_model(batch_sequences)
+            # Predict using the predict method from LitModel
+            batch_predictions = oracle_model.predict(sequences_input)
             predictions.append(batch_predictions.cpu())
 
     return torch.cat(predictions, dim=0)
+
+
+def predict_with_lentimpra_multi_oracle(
+    oracle_models: Tuple[nn.Module, nn.Module, nn.Module],
+    sequences_onehot: torch.Tensor,
+    batch_size: int,
+    device: torch.device
+) -> torch.Tensor:
+    """
+    Predict activities using three separate LentiMPRA oracle models (multi-oracle).
+    Each oracle model predicts activity for one cell type.
+
+    Args:
+        oracle_models: Tuple of (oracle1, oracle2, oracle3)
+        sequences_onehot: (N, L, 4) one-hot encoded sequences
+        batch_size: Batch size for prediction
+        device: Device to use
+
+    Returns:
+        predictions: (N, 3) predicted activities
+                     [:, 0] = K562 (oracle1)
+                     [:, 1] = HepG2 (oracle2)
+                     [:, 2] = WTC11 (oracle3)
+    """
+    oracle1, oracle2, oracle3 = oracle_models
+
+    oracle1.eval()
+    oracle2.eval()
+    oracle3.eval()
+    oracle1 = oracle1.to(device)
+    oracle2 = oracle2.to(device)
+    oracle3 = oracle3.to(device)
+
+    predictions1 = []
+    predictions2 = []
+    predictions3 = []
+
+    num_batches = (len(sequences_onehot) + batch_size - 1) // batch_size
+
+    print(f"  Predicting activities for {len(sequences_onehot)} sequences using multi-oracle...")
+
+    with torch.no_grad():
+        for i in tqdm(range(num_batches), desc="  Multi-oracle prediction"):
+            start_idx = i * batch_size
+            end_idx = min(start_idx + batch_size, len(sequences_onehot))
+
+            # Get batch and convert to (B, 4, L) format
+            batch_sequences = sequences_onehot[start_idx:end_idx]
+            sequences_input = batch_sequences.permute(0, 2, 1).to(device)
+
+            # Get predictions from each oracle using predict method
+            pred1 = oracle1.predict(sequences_input).cpu()
+            pred2 = oracle2.predict(sequences_input).cpu()
+            pred3 = oracle3.predict(sequences_input).cpu()
+
+            # Ensure predictions are (B, 1) shape
+            if pred1.dim() == 1:
+                pred1 = pred1.unsqueeze(1)
+            if pred2.dim() == 1:
+                pred2 = pred2.unsqueeze(1)
+            if pred3.dim() == 1:
+                pred3 = pred3.unsqueeze(1)
+
+            predictions1.append(pred1)
+            predictions2.append(pred2)
+            predictions3.append(pred3)
+
+    # Concatenate all batches
+    all_predictions1 = torch.cat(predictions1, dim=0)  # (N, 1)
+    all_predictions2 = torch.cat(predictions2, dim=0)  # (N, 1)
+    all_predictions3 = torch.cat(predictions3, dim=0)  # (N, 1)
+
+    # Concatenate across cell types to create (N, 3)
+    combined_predictions = torch.cat([all_predictions1, all_predictions2, all_predictions3], dim=1)
+
+    return combined_predictions
 
 
 # =============================================================================
@@ -447,6 +605,7 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
         config: Experiment configuration
         activity_tuple: Single activity tuple to condition on
         tuple_idx: Index of this tuple (for naming output files)
+        samples_file: Optional path to pre-existing samples H5 file
 
     Returns:
         Dictionary containing experiment results
@@ -458,8 +617,14 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
     print(f"TUPLE {tuple_idx}: {activity_tuple}")
     print("=" * 80)
     print(f"Model: {config.model}")
+    print(f"Oracle Mode: {config.oracle_mode}")
+    if config.oracle_mode == 'multi':
+        print(f"Oracle 1 (K562): {config.oracle_checkpoint1}")
+        print(f"Oracle 2 (HepG2): {config.oracle_checkpoint2}")
+        print(f"Oracle 3 (WTC11): {config.oracle_checkpoint3}")
+    else:
+        print(f"Oracle Checkpoint: {config.oracle_checkpoint}")
     print(f"D3 Checkpoint: {config.d3_checkpoint}")
-    print(f"Oracle Checkpoint: {config.oracle_checkpoint}")
     print(f"Samples: {config.num_samples_per_tuple}")
     print(f"Device: {device}")
     print("=" * 80)
@@ -484,12 +649,18 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
                     sequences_indices = torch.tensor(np.array(f['sequences_indices']), dtype=torch.long)
                     sequences_onehot = F.one_hot(sequences_indices, num_classes=4).float()
                     print(f"  Loaded sequences_indices and converted to one-hot: {sequences_onehot.shape}")
+                elif 'onehot_test' in f: # also accepts original dataset (not conditionally-generated seqs)
+                    sequences_onehot = torch.tensor(np.array(f['onehot_test']), dtype=torch.float32)
+                    print(f"  Loaded test set: {sequences_onehot.shape}")
                 else:
                     raise ValueError("H5 file must contain either 'sequences_onehot' or 'sequences_indices'")
 
                 # Load or create conditioning labels
                 if 'conditioning_labels' in f:
                     conditioning_labels = torch.tensor(np.array(f['conditioning_labels']), dtype=torch.float32)
+                    print(f"  Loaded conditioning_labels: {conditioning_labels.shape}")
+                elif 'y_test' in f:
+                    conditioning_labels = torch.tensor(np.array(f['y_test']), dtype=torch.float32)
                     print(f"  Loaded conditioning_labels: {conditioning_labels.shape}")
                 else:
                     # Create conditioning labels from activity tuple
@@ -521,13 +692,23 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
             raise
 
         # Load oracle model only (skip D3 model)
-        print(f"\n[2/2] Loading oracle model...")
+        print(f"\n[2/2] Loading oracle model(s)...")
         if config.model == 'deepstarr':
             oracle_model = load_deepstarr_oracle(config.oracle_checkpoint, str(device))
         elif config.model == 'lentimpra':
-            oracle_model = load_lentimpra_oracle(
-                config.oracle_checkpoint, config.config_path, str(device)
-            )
+            if config.oracle_mode == 'multi':
+                # Load three separate oracle models
+                oracle_model = load_lentimpra_multi_oracle(
+                    config.oracle_checkpoint1,
+                    config.oracle_checkpoint2,
+                    config.oracle_checkpoint3,
+                    str(device)
+                )
+            else:
+                # Load single oracle model
+                oracle_model = load_lentimpra_oracle(
+                    config.oracle_checkpoint, config.config_path, str(device)
+                )
 
     else:
         # Original workflow: Load D3 model and sample sequences
@@ -576,10 +757,29 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
                 config.batch_size, device
             )
 
+        # Load oracle model
+        print(f"\n[3/3] Loading oracle model(s)...")
+        if config.model == 'deepstarr':
+            oracle_model = load_deepstarr_oracle(config.oracle_checkpoint, str(device))
+        elif config.model == 'lentimpra':
+            if config.oracle_mode == 'multi':
+                # Load three separate oracle models
+                oracle_model = load_lentimpra_multi_oracle(
+                    config.oracle_checkpoint1,
+                    config.oracle_checkpoint2,
+                    config.oracle_checkpoint3,
+                    str(device)
+                )
+            else:
+                # Load single oracle model
+                oracle_model = load_lentimpra_oracle(
+                    config.oracle_checkpoint, config.config_path, str(device)
+                )
+
     # Save results for this tuple
     tuple_output_file = output_dir / f"tuple_{tuple_idx}_samples.h5"
 
-    print(f"  Saving samples to: {tuple_output_file}")
+    print(f"\nSaving samples to: {tuple_output_file}")
     with h5py.File(tuple_output_file, 'w') as f:
         # Save sequences (both one-hot and indices)
         f.create_dataset('sequences_onehot', data=sequences_onehot.numpy(),
@@ -598,23 +798,36 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
         f.attrs['tuple_index'] = tuple_idx
         f.attrs['num_samples'] = len(sequences_onehot)
         f.attrs['model'] = config.model
+        f.attrs['oracle_mode'] = config.oracle_mode
         f.attrs['d3_checkpoint'] = config.d3_checkpoint
-        f.attrs['oracle_checkpoint'] = config.oracle_checkpoint
+        if config.oracle_mode == 'multi':
+            f.attrs['oracle_checkpoint1'] = config.oracle_checkpoint1
+            f.attrs['oracle_checkpoint2'] = config.oracle_checkpoint2
+            f.attrs['oracle_checkpoint3'] = config.oracle_checkpoint3
+        else:
+            f.attrs['oracle_checkpoint'] = config.oracle_checkpoint
         f.attrs['num_steps'] = config.num_steps if config.num_steps else (249 if config.model == 'deepstarr' else 230)
         f.attrs['used_preexisting_samples'] = samples_file is not None
         if samples_file is not None:
             f.attrs['source_samples_file'] = samples_file
 
     # Predict activities with oracle
-    print(f"\nPredicting activities with oracle model...")
+    print(f"\nPredicting activities with oracle model(s)...")
     if config.model == 'deepstarr':
         oracle_predictions = predict_with_deepstarr_oracle(
             oracle_model, sequences_onehot, config.batch_size, device
         )
     elif config.model == 'lentimpra':
-        oracle_predictions = predict_with_lentimpra_oracle(
-            oracle_model, sequences_onehot, config.batch_size, device
-        )
+        if config.oracle_mode == 'multi':
+            # Use multi-oracle prediction
+            oracle_predictions = predict_with_lentimpra_multi_oracle(
+                oracle_model, sequences_onehot, config.batch_size, device
+            )
+        else:
+            # Use single oracle prediction
+            oracle_predictions = predict_with_lentimpra_oracle(
+                oracle_model, sequences_onehot, config.batch_size, device
+            )
 
     print(f"  Saving activity predictions to: {tuple_output_file}")
     with h5py.File(tuple_output_file, 'a') as f:
@@ -629,6 +842,7 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
         'tuple_index': tuple_idx,
         'activity_tuple': activity_tuple,
         'num_samples': len(sequences_onehot),
+        'oracle_mode': config.oracle_mode,
         'mean_oracle_prediction': mean_prediction.tolist(),
         'std_oracle_prediction': std_prediction.tolist(),
         'output_file': str(tuple_output_file),
@@ -643,9 +857,10 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
         print(f"\n  Oracle predictions - Dev: {mean_prediction[0]:.3f}±{std_prediction[0]:.3f}, "
               f"HK: {mean_prediction[1]:.3f}±{std_prediction[1]:.3f}")
     elif config.model == 'lentimpra':
-        print(f"\n  Oracle predictions - K562: {mean_prediction[0]:.3f}±{std_prediction[0]:.3f}, "
-              f"HepG2: {mean_prediction[1]:.3f}±{std_prediction[1]:.3f}, "
-              f"WTC11: {mean_prediction[2]:.3f}±{std_prediction[2]:.3f}")
+        print(f"\n  Oracle predictions ({config.oracle_mode}-oracle):")
+        print(f"    K562: {mean_prediction[0]:.3f}±{std_prediction[0]:.3f}")
+        print(f"    HepG2: {mean_prediction[1]:.3f}±{std_prediction[1]:.3f}")
+        print(f"    WTC11: {mean_prediction[2]:.3f}±{std_prediction[2]:.3f}")
 
     print(f"  ✓ Saved to: {tuple_output_file.name}")
 
@@ -669,12 +884,13 @@ def run_single_tuple_experiment(config: ExperimentConfig, activity_tuple: Tuple[
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Cell-Type-Specific Activity Prediction Experiment (Single Tuple)',
+        description='Cell-Type-Specific Activity Prediction with Multi-Oracle Support (Single Tuple)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # DeepSTARR experiment: Sample sequences and predict with oracle
-  python cell_type_specific_sampling.py \\
+
+  # DeepSTARR experiment: Sample sequences and predict with single oracle
+  python cell_type_specific_sampling_multi_oracle.py \\
     --model deepstarr \\
     --d3_checkpoint path/to/d3_deepstarr.ckpt \\
     --oracle_checkpoint path/to/oracle_deepstarr.ckpt \\
@@ -683,24 +899,40 @@ Examples:
     --tuple_idx 0 \\
     --experiment_name deepstarr_high_low_conditions
 
-  # LentiMPRA experiment: Sample sequences and predict with oracle
-  python cell_type_specific_sampling.py \\
+  # LentiMPRA experiment: Single oracle (3 outputs)
+  python cell_type_specific_sampling_multi_oracle.py \\
     --model lentimpra \\
     --d3_checkpoint path/to/d3_lentimpra.ckpt \\
     --oracle_checkpoint path/to/oracle_lentimpra.ckpt \\
     --config model_zoo/lentimpra/configs/transformer.yaml \\
     --activity_tuple "(2.0, 2.0, 2.0)" \\
     --tuple_idx 0 \\
-    --experiment_name lentimpra_cell_specific
+    --experiment_name lentimpra_single_oracle
 
-  # Use pre-existing samples (skip sampling, only oracle prediction)
-  python cell_type_specific_sampling.py \\
-    --model deepstarr \\
-    --oracle_checkpoint path/to/oracle_deepstarr.ckpt \\
-    --config model_zoo/deepstarr/configs/transformer.yaml \\
-    --activity_tuple "(2.0, 2.0)" \\
+  # LentiMPRA experiment: Multi-oracle (3 separate models)
+  python cell_type_specific_sampling_multi_oracle.py \\
+    --model lentimpra \\
+    --oracle_mode multi \\
+    --d3_checkpoint path/to/d3_lentimpra.ckpt \\
+    --oracle_checkpoint1 path/to/oracle_k562.ckpt \\
+    --oracle_checkpoint2 path/to/oracle_hepg2.ckpt \\
+    --oracle_checkpoint3 path/to/oracle_wtc11.ckpt \\
+    --config model_zoo/lentimpra/configs/transformer.yaml \\
+    --activity_tuple "(2.0, 2.0, 2.0)" \\
     --tuple_idx 0 \\
-    --experiment_name oracle_only \\
+    --experiment_name lentimpra_multi_oracle
+
+  # Use pre-existing samples with multi-oracle (skip sampling)
+  python cell_type_specific_sampling_multi_oracle.py \\
+    --model lentimpra \\
+    --oracle_mode multi \\
+    --oracle_checkpoint1 path/to/oracle_k562.ckpt \\
+    --oracle_checkpoint2 path/to/oracle_hepg2.ckpt \\
+    --oracle_checkpoint3 path/to/oracle_wtc11.ckpt \\
+    --config model_zoo/lentimpra/configs/transformer.yaml \\
+    --activity_tuple "(2.0, 2.0, 2.0)" \\
+    --tuple_idx 0 \\
+    --experiment_name multi_oracle_repredict \\
     --samples path/to/existing_samples.h5
 
 Note: Use SLURM job arrays to run multiple tuples in parallel.
@@ -709,10 +941,18 @@ Note: Use SLURM job arrays to run multiple tuples in parallel.
 
     parser.add_argument('--model', required=True, choices=['deepstarr', 'lentimpra'],
                        help='Model type: deepstarr or lentimpra')
-    parser.add_argument('--d3_checkpoint', required=True,
-                       help='Path to trained D3 model checkpoint')
-    parser.add_argument('--oracle_checkpoint', required=True,
-                       help='Path to oracle model checkpoint')
+    parser.add_argument('--oracle_mode', default='single', choices=['single', 'multi'],
+                       help='Oracle mode: single (one model with multiple outputs) or multi (3 separate models)')
+    parser.add_argument('--d3_checkpoint', default=None,
+                       help='Path to trained D3 model checkpoint (not needed if using --samples)')
+    parser.add_argument('--oracle_checkpoint', default=None,
+                       help='Path to oracle model checkpoint (for single oracle mode)')
+    parser.add_argument('--oracle_checkpoint1', default=None,
+                       help='Path to first oracle checkpoint (K562) for multi-oracle mode')
+    parser.add_argument('--oracle_checkpoint2', default=None,
+                       help='Path to second oracle checkpoint (HepG2) for multi-oracle mode')
+    parser.add_argument('--oracle_checkpoint3', default=None,
+                       help='Path to third oracle checkpoint (WTC11) for multi-oracle mode')
     parser.add_argument('--config', required=True,
                        help='Path to D3 model config file')
     parser.add_argument('--activity_tuple', required=True,
@@ -731,12 +971,30 @@ Note: Use SLURM job arrays to run multiple tuples in parallel.
                        default='transformer', help='D3 model architecture (default: transformer)')
     parser.add_argument('--device', default='cuda', choices=['cuda', 'cpu'],
                        help='Device to use (default: cuda)')
-    parser.add_argument('--output_dir', default='./outputs/cell_type_specific',
-                       help='Base output directory (default: ./outputs/cell_type_specific)')
+    parser.add_argument('--output_dir', default='./experiments/cell_type_specific',
+                       help='Base output directory (default: ./experiments/cell_type_specific)')
     parser.add_argument('--samples', type=str, default=None,
                        help='Path to pre-existing samples H5 file to skip sampling and only run oracle prediction')
 
     args = parser.parse_args()
+
+    # Validate oracle checkpoint arguments
+    if args.oracle_mode == 'single':
+        if args.oracle_checkpoint is None:
+            parser.error("--oracle_checkpoint is required for single oracle mode")
+        if args.oracle_checkpoint1 or args.oracle_checkpoint2 or args.oracle_checkpoint3:
+            parser.error("--oracle_checkpoint1/2/3 should not be used in single oracle mode")
+    elif args.oracle_mode == 'multi':
+        if args.model != 'lentimpra':
+            parser.error("Multi-oracle mode is only supported for LentiMPRA model")
+        if not all([args.oracle_checkpoint1, args.oracle_checkpoint2, args.oracle_checkpoint3]):
+            parser.error("All three oracle checkpoints (--oracle_checkpoint1/2/3) are required for multi-oracle mode")
+        if args.oracle_checkpoint:
+            parser.error("--oracle_checkpoint should not be used in multi-oracle mode")
+
+    # Validate D3 checkpoint (only required if not using pre-existing samples)
+    if args.samples is None and args.d3_checkpoint is None:
+        parser.error("--d3_checkpoint is required when not using --samples")
 
     # Parse activity tuple from string
     try:
@@ -767,8 +1025,12 @@ Note: Use SLURM job arrays to run multiple tuples in parallel.
     config = ExperimentConfig(
         experiment_name=args.experiment_name,
         model=args.model,
-        d3_checkpoint=args.d3_checkpoint,
+        d3_checkpoint=args.d3_checkpoint if args.d3_checkpoint else "",
         oracle_checkpoint=args.oracle_checkpoint,
+        oracle_checkpoint1=args.oracle_checkpoint1,
+        oracle_checkpoint2=args.oracle_checkpoint2,
+        oracle_checkpoint3=args.oracle_checkpoint3,
+        oracle_mode=args.oracle_mode,
         config_path=args.config,
         num_samples_per_tuple=args.num_samples_per_tuple,
         num_steps=args.num_steps,
