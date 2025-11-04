@@ -319,11 +319,11 @@ def training_with_PL(dataset_path: str,
         else:
             raise ValueError(f"Unexpected X_train shape: {X_train.shape}")
 
-        # Ensure Y is 1D
-        if Y_train.dim() > 1:
-            Y_train = Y_train.squeeze()
-        if Y_val.dim() > 1:
-            Y_val = Y_val.squeeze()
+        # Ensure Y is 2D (N, signal_dim) for multi-class (k562, hepg2, wtc11)
+        if Y_train.dim() == 1:
+            Y_train = Y_train.unsqueeze(-1)
+        if Y_val.dim() == 1:
+            Y_val = Y_val.unsqueeze(-1)
 
         if verbose:
             print(f"Training data shape: {X_train.shape}")
@@ -761,9 +761,9 @@ class LentIMPRAIterativeAugmentationSampler:
         else:
             raise ValueError(f"Unexpected sequence tensor shape: {sequences.shape}")
 
-        # Ensure targets are 1D
-        if targets.dim() > 1:
-            targets = targets.squeeze()
+        # Ensure targets are 2D (N, signal_dim) for multi-class (k562, hepg2, wtc11)
+        if targets.dim() == 1:
+            targets = targets.unsqueeze(-1)
 
         try:
             with h5py.File(output_path, 'w') as f:
