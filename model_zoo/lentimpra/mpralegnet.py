@@ -523,11 +523,12 @@ class LegNet(nn.Module):
     for DNA regulatory element analysis.
     """
     
-    def __init__(self, in_ch, stem_ch, stem_ks, ef_ks, ef_block_sizes, pool_sizes, resize_factor, activation=nn.SiLU):
+    def __init__(self, in_ch, stem_ch, stem_ks, ef_ks, ef_block_sizes, pool_sizes, resize_factor, output_dim=1, activation=nn.SiLU):
         super().__init__()
         assert len(pool_sizes) == len(ef_block_sizes)
 
         self.in_ch = in_ch
+        self.output_dim = output_dim
         self.stem = LocalBlock(in_ch=in_ch, out_ch=stem_ch, ks=stem_ks, activation=activation)
 
         blocks = []
@@ -551,7 +552,7 @@ class LegNet(nn.Module):
             nn.Linear(out_ch * 2, out_ch * 2),
             nn.BatchNorm1d(out_ch * 2),
             activation(),
-            nn.Linear(out_ch * 2, 1)
+            nn.Linear(out_ch * 2, output_dim)
         )
 
     def forward(self, x):
@@ -562,7 +563,7 @@ class LegNet(nn.Module):
             x: Input tensor of shape (batch_size, channels, sequence_length)
             
         Returns:
-            Output tensor of shape (batch_size,) with predicted activity scores
+            Output tensor of shape (batch_size, output_dim) with predicted activity scores
         """
         x = self.stem(x)
         x = self.main(x)
@@ -570,7 +571,8 @@ class LegNet(nn.Module):
         x = F.adaptive_avg_pool1d(x, 1)
         x = x.squeeze(-1)
         x = self.head(x)
-        x = x.squeeze(-1)
+        if self.output_dim == 1:
+            x = x.squeeze(-1)
         return x
 
 
@@ -609,6 +611,9 @@ class TrainingConfig:
     device: int = 0
     seed: int = 777
     num_workers: int = 8
+    
+    # Output dimension
+    output_dim: int = 1
 
     def __post_init__(self):
         """Post-initialization setup with defaults."""
@@ -631,7 +636,8 @@ class TrainingConfig:
             ef_ks=self.ef_ks,
             ef_block_sizes=self.ef_block_sizes,
             resize_factor=self.resize_factor,
-            pool_sizes=self.pool_sizes
+            pool_sizes=self.pool_sizes,
+            output_dim=self.output_dim
         )
 
     def to_dict(self) -> dict:
