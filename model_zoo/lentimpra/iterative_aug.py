@@ -1034,7 +1034,6 @@ class LentIMPRAIterativeAugmentationSampler:
         subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
 
         # Get test dataset size to determine target_sizes
-<<<<<<< Updated upstream
         # Load test set directly from H5 file to get accurate size
         with h5py.File(data_path, 'r') as f:
             if 'onehot_test' in f:
@@ -1048,11 +1047,6 @@ class LentIMPRAIterativeAugmentationSampler:
                 test_set_size = len(test_sequences)
 
         print(f"Test set size: {test_set_size} samples")
-=======
-        test_ds = self._get_dataset_split(data_path, 'test')
-        test_sequences, test_targets = self._extract_sequences_targets(test_ds)
-        test_set_size = len(test_sequences)
->>>>>>> Stashed changes
 
         # Target sizes based on test set size: iteration 0 = 1x test_set_size, iteration i = (i+1)x test_set_size
         baseline_size = test_set_size

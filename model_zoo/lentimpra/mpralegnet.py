@@ -523,12 +523,11 @@ class LegNet(nn.Module):
     for DNA regulatory element analysis.
     """
     
-    def __init__(self, in_ch, stem_ch, stem_ks, ef_ks, ef_block_sizes, pool_sizes, resize_factor, output_dim=1, activation=nn.SiLU, output_dim=1):
+    def __init__(self, in_ch, stem_ch, stem_ks, ef_ks, ef_block_sizes, pool_sizes, resize_factor, output_dim=1, activation=nn.SiLU):
         super().__init__()
         assert len(pool_sizes) == len(ef_block_sizes)
 
         self.in_ch = in_ch
-        self.output_dim = output_dim
         self.output_dim = output_dim
         self.stem = LocalBlock(in_ch=in_ch, out_ch=stem_ch, ks=stem_ks, activation=activation)
 
@@ -559,12 +558,12 @@ class LegNet(nn.Module):
     def forward(self, x):
         """
         Forward pass through LegNet.
-
+        
         Args:
             x: Input tensor of shape (batch_size, channels, sequence_length)
-
+            
         Returns:
-            Output tensor of shape (batch_size, output_dim) for single output or (batch_size, output_dim) for multi-class
+            Output tensor of shape (batch_size, output_dim) with predicted activity scores
         """
         x = self.stem(x)
         x = self.main(x)
@@ -572,8 +571,6 @@ class LegNet(nn.Module):
         x = F.adaptive_avg_pool1d(x, 1)
         x = x.squeeze(-1)
         x = self.head(x)
-        if self.output_dim == 1:
-            # Only squeeze if output_dim is 1, otherwise keep 2D shape for multi-class
         if self.output_dim == 1:
             x = x.squeeze(-1)
         return x
@@ -586,7 +583,7 @@ class LegNet(nn.Module):
 @dataclass
 class TrainingConfig:
     """Configuration class for training MPRA LegNet models."""
-
+    
     # Model architecture parameters
     stem_ch: int = 64
     stem_ks: int = 11
@@ -594,21 +591,20 @@ class TrainingConfig:
     ef_block_sizes: List[int] = None
     resize_factor: int = 4
     pool_sizes: List[int] = None
-    output_dim: int = 1  # Output dimension: 1 for single task, 3 for multi-class (k562, hepg2, wtc11)
-
+    
     # Data augmentation parameters
     reverse_augment: bool = True
     use_reverse_channel: bool = False
     use_shift: bool = True
     max_shift: Optional[tuple] = None
-
+    
     # Training parameters
     max_lr: float = 0.01
     weight_decay: float = 0.1
     epoch_num: int = 25
     train_batch_size: int = 1024
     valid_batch_size: int = 1024
-
+    
     # System parameters
     model_dir: str = "./models/default_model"
     data_path: str = "../datasets/lenti_MPRA_K562_data.h5"
@@ -641,7 +637,6 @@ class TrainingConfig:
             ef_block_sizes=self.ef_block_sizes,
             resize_factor=self.resize_factor,
             pool_sizes=self.pool_sizes,
-            output_dim=self.output_dim,
             output_dim=self.output_dim
         )
 
