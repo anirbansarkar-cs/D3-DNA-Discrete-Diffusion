@@ -1022,15 +1022,19 @@ class LentIMPRAIterativeAugmentationSampler:
                 'iteration_results': []
             }
 
-        # Get subset dataset size (25% baseline)
+        # Get subset dataset size (from training data)
         train_ds = self._get_dataset_split(data_path, 'train')
         subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
 
-        # Determine baseline size (25% of original training data)
-        # For LentIMPRA, we'll use the actual subset size provided
-        baseline_size = len(subset_sequences)
-        generation_size = baseline_size  # Each generation is same size as baseline (25% of original)
-        target_sizes = {i: baseline_size + (i * generation_size) for i in range(max_iterations + 1)}
+        # Get test dataset size to determine target_sizes
+        test_ds = self._get_dataset_split(data_path, 'y_test')
+        test_sequences, test_targets = self._extract_sequences_targets(test_ds)
+        test_set_size = len(test_sequences)
+
+        # Target sizes based on test set size: iteration 0 = 1x test_set_size, iteration i = (i+1)x test_set_size
+        baseline_size = test_set_size
+        generation_size = test_set_size
+        target_sizes = {i: (i + 1) * test_set_size for i in range(max_iterations + 1)}
 
         # Save iteration 0 dataset (baseline) only if not already present
         iter0_path = os.path.join(datasets_dir, f"iteration_0_dataset.h5")
