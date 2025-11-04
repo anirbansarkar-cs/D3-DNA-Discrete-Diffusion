@@ -2,9 +2,9 @@
 """
 LentIMPRA iterative augmentation sampling for small data experiments (Multi-class).
 
-Iteratively augments a subset dataset by sampling sequences and adding them:
-- Iteration 0: Use provided subset data (25% baseline)
-- Iteration 1+: Subset data + accumulated sampled sequences
+Iteratively augments the test set by sampling sequences and adding them:
+- Iteration 0: Use test set as baseline
+- Iteration 1+: Test set + accumulated sampled sequences
 At each iteration, multiple mpralegnet oracles are trained on the augmented dataset
 and evaluated on the test set to compute Pearson R for 3 cell types (K562, HepG2, WTC11).
 
@@ -651,9 +651,9 @@ class LentIMPRAIterativeAugmentationSampler:
         dataset = self._get_dataset_split(data_file, split)
 
         if augment_iteration == 0:
-            # First iteration: use only subset data
+            # First iteration: use only test set baseline
             size_str = str(self._maybe_len(dataset))
-            print(f"Iteration {augment_iteration}: Using subset data with {size_str} samples")
+            print(f"Iteration {augment_iteration}: Using test set baseline with {size_str} samples")
         else:
             # Subsequent iterations: combine subset + accumulated data
             subset_sequences, subset_targets = self._extract_sequences_targets(dataset)
@@ -982,10 +982,10 @@ class LentIMPRAIterativeAugmentationSampler:
 
         """
         Run iterative augmentation experiment following the paper's methodology:
-        1. Baseline: 25% of original data
-        2. Original + 1 set of generated sequences
-        3. Original + 2 sets of generated sequences
-        4. Original + 3 sets of generated sequences
+        1. Baseline: test set
+        2. Test set + 1 set of generated sequences
+        3. Test set + 2 sets of generated sequences
+        4. Test set + 3 sets of generated sequences
 
         For each augmented dataset, train N mpralegnet oracles and evaluate on test set.
         """
@@ -1029,11 +1029,7 @@ class LentIMPRAIterativeAugmentationSampler:
                 'iteration_results': []
             }
 
-        # Get subset dataset size (from training data)
-        train_ds = self._get_dataset_split(data_path, 'train')
-        subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
-
-        # Get test dataset size to determine target_sizes
+        # Get test dataset size and sequences to use as baseline
         # Load test set directly from H5 file to get accurate size
         with h5py.File(data_path, 'r') as f:
             if 'onehot_test' in f:
@@ -1047,6 +1043,10 @@ class LentIMPRAIterativeAugmentationSampler:
                 test_set_size = len(test_sequences)
 
         print(f"Test set size: {test_set_size} samples")
+
+        # Use TEST SET as the baseline (iteration 0)
+        test_ds = self._get_dataset_split(data_path, 'test')
+        subset_sequences, subset_targets = self._extract_sequences_targets(test_ds)
 
         # Target sizes based on test set size: iteration 0 = 1x test_set_size, iteration i = (i+1)x test_set_size
         baseline_size = test_set_size
@@ -1076,7 +1076,7 @@ class LentIMPRAIterativeAugmentationSampler:
         print("=" * 70)
         print(f"Model checkpoint: {model_checkpoint}")
         print(f"Oracle checkpoint (initial evaluation): {oracle_checkpoint}")
-        print(f"Subset data size (25% baseline): {subset_size} samples")
+        print(f"Baseline data size (test set): {subset_size} samples")
         print(f"Max iterations: {max_iterations}")
         print(f"Sampling steps: {num_steps}")
         print(f"Number of oracle models per condition: {num_oracle_models}")
@@ -1140,7 +1140,7 @@ class LentIMPRAIterativeAugmentationSampler:
                 'avg_test_pearson_wtc11': iter0_train_info.get("avg_wtc11_pearson"),
                 'std_test_pearson_wtc11': iter0_train_info.get("std_wtc11_pearson"),
                 'num_successful_models': iter0_train_info.get("num_successful_models"),
-                'description': "Baseline: 25% original data"
+                'description': "Baseline: test set"
             })
 
             print(f"\nIteration 0 (Baseline): {subset_size} samples")
@@ -1284,9 +1284,9 @@ class LentIMPRAIterativeAugmentationSampler:
                 # Subsequent augmentations: start from previous iteration's total size
                 previous_size = target_sizes.get(iteration - 1, subset_size)
 
-            samples_to_generate = current_target_size - previous_size  # Always generates baseline_size new samples
+            samples_to_generate = current_target_size - previous_size  # Always generates test_set_size new samples
             print(f"  Previous iteration size: {previous_size}, Target size: {current_target_size}")
-            print(f"  Generating {samples_to_generate} new samples (25% of original training data)")
+            print(f"  Generating {samples_to_generate} new samples (test set size)")
 
             conditioning_dataloader = self.create_conditioning_dataloader(data_path, samples_to_generate, batch_size)
 
@@ -1354,7 +1354,7 @@ class LentIMPRAIterativeAugmentationSampler:
             generated_size = total_size - subset_size
 
             print(f"Iteration {iteration}: {total_size} total samples")
-            print(f"  - Original (25%): {subset_size}")
+            print(f"  - Original (test set): {subset_size}")
             print(f"  - Generated: {generated_size}")
             print(f"  - Ratio: {generated_size/subset_size:.2f}x augmentation")
 
@@ -1424,7 +1424,7 @@ def main():
     parser = argparse.ArgumentParser(description='LentIMPRA Iterative Augmentation Experiment')
     parser.add_argument('--model_checkpoint', required=True, help='Path to trained D3 model checkpoint')
     parser.add_argument('--oracle_checkpoint', required=False, default='', help='(Optional) Path to oracle model checkpoint for initial eval log')
-    parser.add_argument('--data_path', required=True, help='Path to subset data file (25% of LentIMPRA)')
+    parser.add_argument('--data_path', required=True, help='Path to LentIMPRA data file (test set will be used as baseline)')
     parser.add_argument('--output_dir', required=True, help='Directory to save iteration datasets and oracles')
     parser.add_argument('--config', help='Path to config file (optional)')
     parser.add_argument('--max_iterations', type=int, default=6, help='Maximum iterations (default: 6)')
