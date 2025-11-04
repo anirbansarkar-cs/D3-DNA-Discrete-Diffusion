@@ -319,11 +319,15 @@ def training_with_PL(dataset_path: str,
         else:
             raise ValueError(f"Unexpected X_train shape: {X_train.shape}")
 
-        # Ensure Y is 2D (N, signal_dim) for multi-class (k562, hepg2, wtc11)
+        # Ensure Y is 2D (N, 3) for multi-class (k562, hepg2, wtc11)
         if Y_train.dim() == 1:
-            Y_train = Y_train.unsqueeze(-1)
+            raise ValueError(f"Expected 2D labels for multi-class, but got 1D with shape {Y_train.shape}")
+        if Y_train.shape[-1] != 3:
+            raise ValueError(f"Expected 3 outputs for multi-class (k562, hepg2, wtc11), but got {Y_train.shape[-1]}")
         if Y_val.dim() == 1:
-            Y_val = Y_val.unsqueeze(-1)
+            raise ValueError(f"Expected 2D labels for multi-class, but got 1D with shape {Y_val.shape}")
+        if Y_val.shape[-1] != 3:
+            raise ValueError(f"Expected 3 outputs for multi-class (k562, hepg2, wtc11), but got {Y_val.shape[-1]}")
 
         if verbose:
             print(f"Training data shape: {X_train.shape}")
@@ -331,7 +335,7 @@ def training_with_PL(dataset_path: str,
             print(f"Validation data shape: {X_val.shape}")
             print(f"Validation labels shape: {Y_val.shape}")
 
-        # Create training configuration
+        # Create training configuration for multi-class (k562, hepg2, wtc11)
         config = TrainingConfig(
             reverse_augment=use_augmentation,
             use_shift=use_augmentation,
@@ -340,7 +344,8 @@ def training_with_PL(dataset_path: str,
             epoch_num=train_max_epochs,
             train_batch_size=batch_size,
             valid_batch_size=batch_size,
-            seed=seed
+            seed=seed,
+            output_dim=3  # Multi-class output for k562, hepg2, wtc11
         )
 
         # Initialize model
@@ -528,10 +533,11 @@ def training_with_PL(dataset_path: str,
 def load_pl_legnet_from_checkpoint(ckpt_path: str, batch_size: int = 1024, patience: int = 10) -> Optional[PL_LegNet]:
     """Load PL_LegNet model weights from a checkpoint saved with save_weights_only=True."""
     try:
-        # Create a default config
+        # Create a default config for multi-class (k562, hepg2, wtc11)
         config = TrainingConfig(
             train_batch_size=batch_size,
-            valid_batch_size=batch_size
+            valid_batch_size=batch_size,
+            output_dim=3  # Multi-class output for k562, hepg2, wtc11
         )
 
         model = PL_LegNet(config=config, batch_size=batch_size, patience=patience)
@@ -761,9 +767,11 @@ class LentIMPRAIterativeAugmentationSampler:
         else:
             raise ValueError(f"Unexpected sequence tensor shape: {sequences.shape}")
 
-        # Ensure targets are 2D (N, signal_dim) for multi-class (k562, hepg2, wtc11)
+        # Ensure targets are 2D (N, 3) for multi-class (k562, hepg2, wtc11)
         if targets.dim() == 1:
-            targets = targets.unsqueeze(-1)
+            raise ValueError(f"Expected 2D targets for multi-class, but got 1D with shape {targets.shape}")
+        if targets.shape[-1] != 3:
+            raise ValueError(f"Expected 3 outputs for multi-class (k562, hepg2, wtc11), but got {targets.shape[-1]}")
 
         try:
             with h5py.File(output_path, 'w') as f:
