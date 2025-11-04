@@ -608,9 +608,16 @@ class LentIMPRAIterativeAugmentationSampler:
 
     def create_conditioning_dataloader(self, data_file: str, target_size: int, batch_size: int = 128) -> DataLoader:
         """Create dataloader with conditioning labels from test set, but meeting target size requirements."""
-        # Get test set for conditioning labels
-        test_dataset = self._get_dataset_split(data_file, 'test')
-        test_sequences, test_targets = self._extract_sequences_targets(test_dataset)
+        # Load test targets directly from H5 file
+        with h5py.File(data_file, 'r') as f:
+            if 'y_test' in f:
+                test_targets = torch.tensor(np.array(f['y_test']), dtype=torch.float32)
+            elif 'Y_test' in f:
+                test_targets = torch.tensor(np.array(f['Y_test']), dtype=torch.float32)
+            else:
+                # Fallback: try using _get_dataset_split
+                test_dataset = self._get_dataset_split(data_file, 'test')
+                test_sequences, test_targets = self._extract_sequences_targets(test_dataset)
 
         # Use test targets, but repeat/sample to meet target size
         if len(test_targets) >= target_size:
@@ -1027,9 +1034,19 @@ class LentIMPRAIterativeAugmentationSampler:
         subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
 
         # Get test dataset size to determine target_sizes
-        test_ds = self._get_dataset_split(data_path, 'y_test')
-        test_sequences, test_targets = self._extract_sequences_targets(test_ds)
-        test_set_size = len(test_sequences)
+        # Load test set directly from H5 file to get accurate size
+        with h5py.File(data_path, 'r') as f:
+            if 'onehot_test' in f:
+                test_set_size = f['onehot_test'].shape[0]
+            elif 'y_test' in f:
+                test_set_size = f['y_test'].shape[0]
+            else:
+                # Fallback: try using _get_dataset_split
+                test_ds = self._get_dataset_split(data_path, 'test')
+                test_sequences, test_targets = self._extract_sequences_targets(test_ds)
+                test_set_size = len(test_sequences)
+
+        print(f"Test set size: {test_set_size} samples")
 
         # Target sizes based on test set size: iteration 0 = 1x test_set_size, iteration i = (i+1)x test_set_size
         baseline_size = test_set_size
