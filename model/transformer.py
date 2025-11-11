@@ -133,19 +133,21 @@ class EmbeddingLayer(nn.Module):
         self.signal_dim = signal_dim
         self.dim = dim
 
+        # Always initialize vocab embedding
+        self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
+        torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
+
+        # Initialize signal embedding based on mode
         if embedding_mode == 'concat':
-            # In concat mode, we concatenate raw label values to the sequence
-            # Then map the entire extended sequence to hidden dimension
-            # Vocab embedding for sequence tokens
-            self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
-            torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
-            # Linear layer to embed the raw label values (one per signal component)
-            self.label_embedding = nn.Linear(1, dim)  # Maps each scalar label to dim
+            # In concat mode, each label component gets its own embedding
+            # Create signal_dim separate embeddings, each mapping scalar to dim
+            self.label_embeddings = nn.ModuleList([
+                nn.Linear(1, dim) for _ in range(signal_dim)
+            ])
         else:
             # Standard embedding setup for 'add' and 'mask' modes
-            self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
+            # Maps entire label vector (signal_dim,) -> (dim,)
             self.signal_embedding = nn.Linear(signal_dim, dim)
-            torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
     def forward(self, x, y):
         """
@@ -166,16 +168,20 @@ class EmbeddingLayer(nn.Module):
             return vocab_embed
 
         if self.embedding_mode == 'concat':
-            # Concatenate mode: append raw label values to sequence, then embed each
+            # Concatenate mode: append embedded label values to sequence
             # y shape: (batch_size, signal_dim)
+            y = y.to(torch.float32)
 
-            # Embed each label component independently: (batch_size, signal_dim) -> (batch_size, signal_dim, dim)
-            # Reshape y to (batch_size, signal_dim, 1) for linear layer
-            y_reshaped = y.unsqueeze(-1).to(torch.float32)  # (batch_size, signal_dim, 1)
+            # Embed each label component using its own linear layer
+            # Each component: (batch_size, 1) -> (batch_size, dim)
+            label_embeds = []
+            for i in range(self.signal_dim):
+                label_i = y[:, i:i+1]  # (batch_size, 1)
+                embed_i = self.label_embeddings[i](label_i)  # (batch_size, dim)
+                label_embeds.append(embed_i)
 
-            # Apply linear layer to each label component
-            batch_size, signal_dim, _ = y_reshaped.shape
-            label_embed = self.label_embedding(y_reshaped)  # (batch_size, signal_dim, dim)
+            # Stack to get (batch_size, signal_dim, dim)
+            label_embed = torch.stack(label_embeds, dim=1)  # (batch_size, signal_dim, dim)
 
             # Concatenate along sequence dimension
             # vocab_embed: (batch_size, seq_length, dim)
@@ -248,7 +254,7 @@ class TransformerModel(nn.Module):
         self.vocab_embed = EmbeddingLayer(
             dim=config.model.hidden_size,
             vocab_dim=vocab_size,
-            signal_dim=config.dataset.signal_dim,
+            signal_dim=signal_dim,
             embedding_mode=embedding_mode,
         )
 
