@@ -2,11 +2,14 @@
 """
 LentIMPRA iterative augmentation sampling for small data experiments (Multi-class).
 
-Iteratively augments the test set by sampling sequences and adding them:
-- Iteration 0: Use test set as baseline
-- Iteration 1+: Test set + accumulated sampled sequences
+Iteratively augments the train set by sampling sequences and adding them:
+- Iteration 0: Use train set as baseline (oracles train on train set, evaluate on test set)
+- Iteration 1+: Train set + accumulated sampled sequences (conditioned on test set labels)
 At each iteration, multiple mpralegnet oracles are trained on the augmented dataset
 and evaluated on the test set to compute Pearson R for 3 cell types (K562, HepG2, WTC11).
+
+Each iteration adds a constant number of generated samples equal to the original train set size.
+Sequences are conditioned on test set labels (repeating test labels as necessary to meet target size).
 
 Adapted from DeepSTARR version to use LentIMPRA multi-class data and mpralegnet oracle.
 Signal dimension: 3 (k562, hepg2, wtc11)
@@ -997,11 +1000,14 @@ class LentIMPRAIterativeAugmentationSampler:
 
         """
         Run iterative augmentation experiment following the paper's methodology:
-        1. Baseline: test set
-        2. Test set + 1 set of generated sequences
-        3. Test set + 2 sets of generated sequences
-        4. Test set + 3 sets of generated sequences
+        1. Baseline: train set (oracles train on train set, evaluate on test set)
+        2. Train set + train_set_size generated sequences (conditioned on test set labels)
+        3. Train set + 2×train_set_size generated sequences
+        4. Train set + 3×train_set_size generated sequences
+        ...
 
+        Each iteration adds a constant number of generated samples equal to the original train set size.
+        Sequences are conditioned on test set labels (repeating test labels as necessary to meet target size).
         For each augmented dataset, train N mpralegnet oracles and evaluate on test set.
         """
         # Set seeds at the start of the experiment
@@ -1044,29 +1050,31 @@ class LentIMPRAIterativeAugmentationSampler:
                 'iteration_results': []
             }
 
-        # Get test dataset size and sequences to use as baseline
-        # Load test set directly from H5 file to get accurate size
+        # Get train dataset size and sequences to use as baseline
+        # Load train set directly from H5 file to get accurate size
         with h5py.File(data_path, 'r') as f:
-            if 'onehot_test' in f:
-                test_set_size = f['onehot_test'].shape[0]
-            elif 'y_test' in f:
-                test_set_size = f['y_test'].shape[0]
+            if 'onehot_train' in f:
+                train_set_size = f['onehot_train'].shape[0]
+            elif 'y_train' in f:
+                train_set_size = f['y_train'].shape[0]
+            elif 'X_train' in f:
+                train_set_size = f['X_train'].shape[0]
             else:
                 # Fallback: try using _get_dataset_split
-                test_ds = self._get_dataset_split(data_path, 'test')
-                test_sequences, test_targets = self._extract_sequences_targets(test_ds)
-                test_set_size = len(test_sequences)
+                train_ds = self._get_dataset_split(data_path, 'train')
+                train_sequences, train_targets = self._extract_sequences_targets(train_ds)
+                train_set_size = len(train_sequences)
 
-        print(f"Test set size: {test_set_size} samples")
+        print(f"Train set size: {train_set_size} samples")
 
-        # Use TEST SET as the baseline (iteration 0)
-        test_ds = self._get_dataset_split(data_path, 'test')
-        subset_sequences, subset_targets = self._extract_sequences_targets(test_ds)
+        # Use TRAIN SET as the baseline (iteration 0)
+        train_ds = self._get_dataset_split(data_path, 'train')
+        subset_sequences, subset_targets = self._extract_sequences_targets(train_ds)
 
-        # Target sizes based on test set size: iteration 0 = 1x test_set_size, iteration i = (i+1)x test_set_size
-        baseline_size = test_set_size
-        generation_size = test_set_size
-        target_sizes = {i: (i + 1) * test_set_size for i in range(max_iterations + 1)}
+        # Target sizes based on train set size: iteration 0 = 1x train_set_size, iteration i = (i+1)x train_set_size
+        baseline_size = train_set_size
+        generation_size = train_set_size
+        target_sizes = {i: (i + 1) * train_set_size for i in range(max_iterations + 1)}
 
         # Save iteration 0 dataset (baseline) only if not already present
         iter0_path = os.path.join(datasets_dir, f"iteration_0_dataset.h5")
@@ -1091,7 +1099,7 @@ class LentIMPRAIterativeAugmentationSampler:
         print("=" * 70)
         print(f"Model checkpoint: {model_checkpoint}")
         print(f"Oracle checkpoint (initial evaluation): {oracle_checkpoint}")
-        print(f"Baseline data size (test set): {subset_size} samples")
+        print(f"Baseline data size (train set): {subset_size} samples")
         print(f"Max iterations: {max_iterations}")
         print(f"Sampling steps: {num_steps}")
         print(f"Number of oracle models per condition: {num_oracle_models}")
@@ -1155,10 +1163,10 @@ class LentIMPRAIterativeAugmentationSampler:
                 'avg_test_pearson_wtc11': iter0_train_info.get("avg_wtc11_pearson"),
                 'std_test_pearson_wtc11': iter0_train_info.get("std_wtc11_pearson"),
                 'num_successful_models': iter0_train_info.get("num_successful_models"),
-                'description': "Baseline: test set"
+                'description': "Baseline: train set"
             })
 
-            print(f"\nIteration 0 (Baseline): {subset_size} samples")
+            print(f"\nIteration 0 (Baseline): {subset_size} samples (train set)")
             print(f"Test Pearson R - K562: {iter0_train_info.get('avg_k562_pearson'):.4f} ± {iter0_train_info.get('std_k562_pearson'):.4f}")
             print(f"Test Pearson R - HepG2: {iter0_train_info.get('avg_hepg2_pearson'):.4f} ± {iter0_train_info.get('std_hepg2_pearson'):.4f}")
             print(f"Test Pearson R - WTC11: {iter0_train_info.get('avg_wtc11_pearson'):.4f} ± {iter0_train_info.get('std_wtc11_pearson'):.4f}")
@@ -1290,18 +1298,9 @@ class LentIMPRAIterativeAugmentationSampler:
                 continue
 
             # Otherwise: sample new sequences for this iteration and then train oracles
-            # Generate samples to add to PREVIOUS iteration's complete dataset
-            current_target_size = target_sizes.get(iteration, subset_size)
-            if iteration == 1:
-                # First augmentation: start from baseline
-                previous_size = subset_size
-            else:
-                # Subsequent augmentations: start from previous iteration's total size
-                previous_size = target_sizes.get(iteration - 1, subset_size)
-
-            samples_to_generate = current_target_size - previous_size  # Always generates test_set_size new samples
-            print(f"  Previous iteration size: {previous_size}, Target size: {current_target_size}")
-            print(f"  Generating {samples_to_generate} new samples (test set size)")
+            # Each iteration adds a constant number of generated samples equal to the original train set size
+            samples_to_generate = subset_size  # Constant: always generate train_set_size samples per iteration
+            print(f"  Generating {samples_to_generate} new samples (constant: original train set size)")
 
             conditioning_dataloader = self.create_conditioning_dataloader(data_path, samples_to_generate, batch_size)
 
@@ -1369,7 +1368,7 @@ class LentIMPRAIterativeAugmentationSampler:
             generated_size = total_size - subset_size
 
             print(f"Iteration {iteration}: {total_size} total samples")
-            print(f"  - Original (test set): {subset_size}")
+            print(f"  - Original (train set): {subset_size}")
             print(f"  - Generated: {generated_size}")
             print(f"  - Ratio: {generated_size/subset_size:.2f}x augmentation")
 
