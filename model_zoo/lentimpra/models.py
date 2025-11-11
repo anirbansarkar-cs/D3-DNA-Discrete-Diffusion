@@ -31,10 +31,16 @@ class LentIMPRATransformerModelMultiClass(TransformerModel):
     """LentIMPRA-specific transformer model wrapper for multi-class classification."""
 
     def __init__(self, config: DictConfig):
-        # Use config values directly - don't override
-        # Config should specify signal_dim=3 for multi-class
+        # Ensure dataset-specific config is set but preserve signal_dim from config
         if not hasattr(config, 'dataset'):
-            raise ValueError("Config must have 'dataset' section with signal_dim, num_classes, and sequence_length")
+            config.dataset = {}
+
+        config.dataset.name = 'lentimpra'
+        config.dataset.num_classes = 4
+        config.dataset.sequence_length = 230
+        # Preserve signal_dim from config (should be 3 for multi-class)
+        if not hasattr(config.dataset, 'signal_dim'):
+            raise ValueError("Config must specify dataset.signal_dim for multi-class model")
 
         super().__init__(config)
 
@@ -105,16 +111,21 @@ class LentIMPRAConvolutionalModel(ConvolutionalModel):
 def create_model(config: DictConfig, architecture: str):
     """
     Factory function to create LentIMPRA models.
-    
+
     Args:
         config: Configuration object
         architecture: 'transformer' or 'convolutional'
-        
+
     Returns:
         Model instance
     """
     if architecture.lower() == 'transformer':
-        return LentIMPRATransformerModel(config)
+        # Check if multi-class mode based on signal_dim
+        if hasattr(config.dataset, 'signal_dim') and config.dataset.signal_dim > 1:
+            print(f"Creating LentIMPRA Transformer model with multi-class support (signal_dim={config.dataset.signal_dim})")
+            return LentIMPRATransformerModelMultiClass(config)
+        else:
+            return LentIMPRATransformerModel(config)
     elif architecture.lower() == 'convolutional':
         return LentIMPRAConvolutionalModel(config)
     else:
