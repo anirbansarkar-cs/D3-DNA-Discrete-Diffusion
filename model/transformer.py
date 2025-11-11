@@ -115,25 +115,86 @@ class DDiTBlock(nn.Module):
 
 
 class EmbeddingLayer(nn.Module):
-    def __init__(self, dim, vocab_dim, signal_dim=2):
+    def __init__(self, dim, vocab_dim, signal_dim=2, embedding_mode='add'):
         """
-        Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
-        2-> add in eigenvectors, 3 -> use pretrained embedding matrix
+        Embedding layer with multiple modes for signal conditioning.
+
+        Args:
+            dim: Hidden dimension size
+            vocab_dim: Vocabulary size (e.g., 4 for DNA: A, C, G, T)
+            signal_dim: Signal/label dimension
+            embedding_mode: Mode for signal embedding
+                - 'add': Add signal embedding to vocab embedding (default)
+                - 'concat': Concatenate raw label values to sequence, then embed all together
+                - 'mask': Same as 'add' but with NaN masking support
         """
         super().__init__()
-        self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
-        #remove if label embedding is used
-        self.signal_embedding = nn.Linear(signal_dim, dim)
-        torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
+        self.embedding_mode = embedding_mode
+        self.signal_dim = signal_dim
+        self.dim = dim
+
+        if embedding_mode == 'concat':
+            # In concat mode, we concatenate raw label values to the sequence
+            # Then map the entire extended sequence to hidden dimension
+            # Vocab embedding for sequence tokens
+            self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
+            torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
+            # Linear layer to embed the raw label values (one per signal component)
+            self.label_embedding = nn.Linear(1, dim)  # Maps each scalar label to dim
+        else:
+            # Standard embedding setup for 'add' and 'mask' modes
+            self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
+            self.signal_embedding = nn.Linear(signal_dim, dim)
+            torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
     def forward(self, x, y):
-        vocab_embed = self.embedding[x] #return only this if label embedding is used
-        if y is not None:
-            signal_embed = self.signal_embedding(y.to(torch.float32))
-            return torch.add(vocab_embed, signal_embed[:, None, :]) #[:, None, :] extra for deepstarr
-        else:
+        """
+        Forward pass with different embedding modes.
+
+        Args:
+            x: Sequence tokens (batch_size, seq_length)
+            y: Signal labels (batch_size, signal_dim) - can contain NaN in 'mask' mode
+
+        Returns:
+            Embedded sequence (batch_size, seq_length, dim) for 'add'/'mask' modes
+            or (batch_size, seq_length + signal_dim, dim) for 'concat' mode
+        """
+        vocab_embed = self.embedding[x]  # (batch_size, seq_length, dim)
+
+        if y is None:
             # For unconditional generation, return only vocab embedding
             return vocab_embed
+
+        if self.embedding_mode == 'concat':
+            # Concatenate mode: append raw label values to sequence, then embed each
+            # y shape: (batch_size, signal_dim)
+
+            # Embed each label component independently: (batch_size, signal_dim) -> (batch_size, signal_dim, dim)
+            # Reshape y to (batch_size, signal_dim, 1) for linear layer
+            y_reshaped = y.unsqueeze(-1).to(torch.float32)  # (batch_size, signal_dim, 1)
+
+            # Apply linear layer to each label component
+            batch_size, signal_dim, _ = y_reshaped.shape
+            label_embed = self.label_embedding(y_reshaped)  # (batch_size, signal_dim, dim)
+
+            # Concatenate along sequence dimension
+            # vocab_embed: (batch_size, seq_length, dim)
+            # label_embed: (batch_size, signal_dim, dim)
+            combined = torch.cat([vocab_embed, label_embed], dim=1)  # (batch_size, seq_length + signal_dim, dim)
+            return combined
+
+        elif self.embedding_mode == 'mask':
+            # Mask mode: same as 'add' but zero out NaN values
+            y_masked = y.clone()
+            nan_mask = torch.isnan(y_masked)
+            y_masked = torch.where(nan_mask, torch.zeros_like(y_masked), y_masked)
+
+            signal_embed = self.signal_embedding(y_masked.to(torch.float32))  # (batch_size, dim)
+            return torch.add(vocab_embed, signal_embed[:, None, :])
+
+        else:  # 'add' mode (default)
+            signal_embed = self.signal_embedding(y.to(torch.float32))
+            return torch.add(vocab_embed, signal_embed[:, None, :])  # [:, None, :] broadcasts to sequence length
 
 
 class DDitFinalLayer(nn.Module):
@@ -181,12 +242,14 @@ class TransformerModel(nn.Module):
         num_classes = config.dataset.num_classes
         signal_dim = config.dataset.signal_dim
         class_dropout_prob = getattr(config.model, 'class_dropout_prob', 0.1)
-        
+        embedding_mode = getattr(config.model, 'embedding_mode', 'add')
+
         # Core components
         self.vocab_embed = EmbeddingLayer(
-            dim=config.model.hidden_size, 
+            dim=config.model.hidden_size,
             vocab_dim=vocab_size,
             signal_dim=config.dataset.signal_dim,
+            embedding_mode=embedding_mode,
         )
 
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
@@ -213,12 +276,13 @@ class TransformerModel(nn.Module):
         
         # Model configuration
         self.scale_by_sigma = getattr(config.model, 'scale_by_sigma', False)
+        self.embedding_mode = embedding_mode
 
-    def forward(self, indices: torch.Tensor, labels: Optional[torch.Tensor] = None, 
+    def forward(self, indices: torch.Tensor, labels: Optional[torch.Tensor] = None,
                 train: bool = True, sigma: Optional[torch.Tensor] = None, layer_idx: Optional[int] = None) -> torch.Tensor:
         """
         Forward pass through the transformer.
-        
+
         Args:
             indices: Token indices (batch_size, seq_length)
             labels: Label/signal tensor (batch_size, signal_dim) or None for unconditional
@@ -226,15 +290,16 @@ class TransformerModel(nn.Module):
             sigma: Noise level (batch_size,)
             layer_idx: Index of the layer to return the representation of
         Returns:
-            Model output (batch_size, seq_length, vocab_size)
+            Model output (batch_size, seq_length, vocab_size) for all modes
+            Note: In 'concat' mode, only sequence positions are returned (label positions excluded from output)
         """
         # Embedding
         x = self.vocab_embed(indices, labels)
-        
+
         # Conditioning
         c = F.silu(self.sigma_map(sigma))
         # Note: label_embed could be added here if needed: + self.label_embed(labels, train)
-        
+
         # Rotary position encoding
         rotary_cos_sin = self.rotary_emb(x)
 
@@ -250,9 +315,23 @@ class TransformerModel(nn.Module):
             x = self.output_layer(x, c)
 
         # Mask out the input tokens (standard diffusion technique)
-        x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
-        
-        return x, rep
+        # In concat mode, only mask the sequence tokens, not the label positions
+        if self.embedding_mode == 'concat':
+            # x shape: (batch_size, seq_length + signal_dim, vocab_size)
+            # Only process and return the first seq_length positions (the actual sequence)
+            # The label positions are only used for attention context, not for prediction
+            seq_length = indices.shape[1]
+            x_seq = x[:, :seq_length, :]  # Sequence part only
+
+            # Mask out input tokens in sequence part
+            x_seq = torch.scatter(x_seq, -1, indices[..., None], torch.zeros_like(x_seq[..., :1]))
+
+            # Return only sequence part - label positions don't contribute to loss
+            return x_seq, rep
+        else:
+            # Standard masking for 'add' and 'mask' modes
+            x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
+            return x, rep
 
 
 def create_transformer_model(config: DictConfig) -> TransformerModel:
