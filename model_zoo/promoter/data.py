@@ -57,6 +57,8 @@ class PromoterDataset(Dataset):
         # Extract sequences and labels from the data
         # data shape: (N, 1024, 6) -> seq_one_hot: (N, 1024, 4), label: (N, 1024, 1)
         seq_one_hot = data[:, :, :4]  # One-hot encoded sequences
+        # Regulatory activity labels: each condition is the likelihood 
+        # of transcripttion initiation at each base
         label = data[:, :, 4:5]       # Regulatory activity labels
         
         # Convert to tensors
