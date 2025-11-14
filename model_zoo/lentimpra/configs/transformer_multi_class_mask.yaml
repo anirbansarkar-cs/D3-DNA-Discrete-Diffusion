@@ -7,7 +7,7 @@ dataset:
   signal_dim: 3  # Multi-class with 3 signal dimensions (can contain NaN values)
 
 # Hardware configuration
-ngpus: 2
+ngpus: 1
 nnodes: 1
 tokens: 4
 
@@ -100,6 +100,6 @@ wandb:
 
 # Paths - provide full paths to your data and oracle model
 paths:
-  data_file: "model_zoo/lentimpra/lenti_MPRA_K562_data.h5"  # User must specify their data file
+  data_file: "/grid/koo/home/shared/d3/data/lentimpra/lenti_MPRA_3cells_full_masked.h5"  # User must specify their data file
   oracle_model: "model_zoo/lentimpra/oracle_models/best_model-epoch=24-val_pearson=0.814.ckpt"
   checkpoints_dir: "checkpoints"

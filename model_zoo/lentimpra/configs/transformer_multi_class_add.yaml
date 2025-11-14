@@ -7,7 +7,7 @@ dataset:
   signal_dim: 3  # Multi-class with 3 signal dimensions
 
 # Hardware configuration
-ngpus: 2
+ngpus: 1
 nnodes: 1
 tokens: 4
 
@@ -55,7 +55,7 @@ eval:
 
 # SP-MSE validation configuration
 sp_mse_validation:
-  enabled: true  # Set to true to enable SP-MSE validation during training
+  enabled: false  # Set to true to enable SP-MSE validation during training
   validation_freq_epochs: 4  # Frequency in epochs to run SP-MSE validation
   validation_samples: 1000  # Number of samples from validation set (0 = use all)
   oracle_path: null  # Path to oracle model (auto-resolved if null)
@@ -100,6 +100,6 @@ wandb:
 
 # Paths - provide full paths to your data and oracle model
 paths:
-  data_file: "model_zoo/lentimpra/lenti_MPRA_K562_data.h5"  # User must specify their data file
+  data_file: "/grid/koo/home/shared/d3/data/lentimpra/60k/dataset_3cells_230bp_cleaned.h5"  # User must specify their data file
   oracle_model: "model_zoo/lentimpra/oracle_models/best_model-epoch=24-val_pearson=0.814.ckpt"
-  checkpoints_dir: "checkpoints"
+  checkpoints_dir: "experiments/lenti60k/add"
