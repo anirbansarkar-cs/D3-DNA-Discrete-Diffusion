@@ -124,19 +124,19 @@ def main():
     num_samples = args.num_samples
     
     if not args.unconditional:
-        if args.use_test_set:
-            # Use test set labels from dataset
-            if not args.data_path:
-                print("Error: --data_path is required when using --use_test_set")
-                return 1
+        # if args.use_test_set:
+        #     # Use test set labels from dataset
+        #     if not args.data_path:
+        #         print("Error: --data_path is required when using --use_test_set")
+        #         return 1
             
-            # Load test dataset to get labels
-            from model_zoo.promoter.data import PromoterDataset
-            test_dataset = PromoterDataset(args.data_path, split='test')
-            conditioning_labels = test_dataset.y.to(sampler.device)  # Shape: (N, 1024, 1)
-            num_samples = len(test_dataset)
-            print(f"Using test set labels: {num_samples} samples with shape {conditioning_labels.shape}")
-        elif args.expression_target is not None:
+        #     # Load test dataset to get labels
+        #     from model_zoo.promoter.data import PromoterDataset
+        #     test_dataset = PromoterDataset(args.data_path, split='test')
+        #     conditioning_labels = test_dataset.y.to(sampler.device)  # Shape: (N, 1024, 1)
+        #     num_samples = len(test_dataset)
+        #     print(f"Using test set labels: {num_samples} samples with shape {conditioning_labels.shape}")
+        if args.expression_target is not None:
             # User-specified expression target
             conditioning_labels = torch.tensor([[args.expression_target]], device=sampler.device).expand(args.num_samples, -1)
             print(f"Using specified expression target: {args.expression_target}")
