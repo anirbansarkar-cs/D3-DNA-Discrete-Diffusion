@@ -87,6 +87,7 @@ model:
   scale_by_sigma: false
   dropout: 0.1
   class_dropout_prob: 0.1
+  use_global_conditioning: false  # true: single value for entire sequence, false: per-position values (default)
 
 # Logging configuration (optional)
 wandb:
