@@ -13,7 +13,7 @@ from omegaconf import OmegaConf, DictConfig
 import math
 
 from einops import rearrange
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func, flash_attn_qkvpacked_func
 
 from . import rotary
 from .layers import (
@@ -81,26 +81,24 @@ class DDiTBlock(nn.Module):
 
         qkv = self.attn_qkv(x)
         qkv = rearrange(qkv, 'b s (three h d) -> b s three h d', three=3, h=self.n_heads)
-        
+
         # Apply rotary position embedding
         with torch.amp.autocast('cuda', enabled=False):
             cos, sin = rotary_cos_sin
             qkv = rotary.apply_rotary_pos_emb(qkv, cos.to(qkv.dtype), sin.to(qkv.dtype))
-        
-        qkv = rearrange(qkv, 'b s ... -> (b s) ...')
-        
-        # Prepare sequence lengths for flash attention
+
+        # Flash attention - use appropriate version based on sequence length variability
         if seqlens is None:
-            cu_seqlens = torch.arange(
-                0, (batch_size + 1) * seq_len, step=seq_len,
-                dtype=torch.int32, device=x.device
-            )
+            # Fixed-length sequences: use standard flash attention
+            # qkv shape: (batch, seq_len, 3, num_heads, head_dim)
+            x = flash_attn_qkvpacked_func(qkv, dropout_p=0., causal=False)
+            x = rearrange(x, 'b s h d -> b s (h d)')
         else:
+            # Variable-length sequences: use varlen flash attention
+            qkv = rearrange(qkv, 'b s ... -> (b s) ...')
             cu_seqlens = seqlens.cumsum(-1)
-            
-        # Flash attention
-        x = flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, seq_len, 0., causal=False)
-        x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
+            x = flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, seq_len, 0., causal=False)
+            x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
 
         # Apply attention output projection with gating
         x = bias_dropout_scale_fn(self.attn_out(x), None, gate_msa, x_skip, self.dropout)
