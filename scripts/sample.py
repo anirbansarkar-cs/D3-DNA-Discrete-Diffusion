@@ -208,9 +208,9 @@ class BaseSampler:
                 # Convert float8 to float16 for HDF5 compatibility
                 if sequences.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
                     print("Converting float8 to float16 for HDF5 compatibility")
-                    representations_data = sequences.to(torch.float16).numpy()
+                    representations_data = sequences.to(torch.float16).cpu().numpy()
                 else:
-                    representations_data = sequences.numpy()
+                    representations_data = sequences.cpu().numpy()
                 f.create_dataset("representations", data=representations_data)
             print(f"Representations saved as HDF5 to: {output_path}")
         elif format == "pt":
