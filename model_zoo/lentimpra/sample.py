@@ -64,6 +64,7 @@ def main():
     # Add LentIMPRA-specific conditioning arguments
     parser.add_argument('--activity', type=float, help='Regulatory activity value (if not provided, uses random)')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
+    parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
     args = parser.parse_args()
     
     # Load config if not provided
@@ -86,14 +87,29 @@ def main():
     
     # Generate conditioning labels based on arguments
     conditioning_labels = None
+    num_samples = args.num_samples
+
     if not args.unconditional:
-        if args.activity is not None:
+        if args.use_test_set:
+            # Use test set labels from dataset
+            if not args.data_path:
+                print("Error: --data_path is required when using --use_test_set")
+                return 1
+
+            # Load test dataset to get labels
+            from model_zoo.lentimpra.data import LentIMPRADataset
+            test_dataset = LentIMPRADataset(args.data_path, split='test')
+            conditioning_labels = test_dataset.y.to(sampler.device)
+            num_samples = len(test_dataset)
+            print(f"Using test set labels: {num_samples} samples with shape {conditioning_labels.shape}")
+
+        elif args.activity is not None:
             # User-specified activity
-            conditioning_labels = torch.tensor([[args.activity]], device=sampler.device).expand(args.num_samples, -1)
+            conditioning_labels = torch.tensor([[args.activity]], device=sampler.device).expand(num_samples, -1)
             print(f"Using specified activity: {args.activity}")
         else:
             # Random activity (default behavior)
-            conditioning_labels = sampler.generate_conditioning_labels(args.num_samples, config)
+            conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
             print("Using random activities")
     else:
         print("Sampling unconditionally (no conditioning labels)")
@@ -108,7 +124,7 @@ def main():
     results = sampler.sample_and_save(
         checkpoint_path=args.checkpoint,
         config=config,
-        num_samples=args.num_samples,
+        num_samples=num_samples,
         steps=steps,
         architecture=args.architecture,
         conditioning_labels=conditioning_labels,
