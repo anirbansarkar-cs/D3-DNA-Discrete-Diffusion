@@ -114,12 +114,13 @@ class BaseSampler:
             # Fallback for datasets like DeepSTARR with 2 activities
             return torch.randn(num_samples, 2, device=self.device)
     
-    def sample_sequences_with_pc_sampler(self, checkpoint_path: str, config: OmegaConf, 
+    def sample_sequences_with_pc_sampler(self, checkpoint_path: str, config: OmegaConf,
                                        num_samples: int, steps: int, architecture: str = 'transformer',
-                                       conditioning_labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+                                       conditioning_labels: Optional[torch.Tensor] = None,
+                                       sampling_batch_size: Optional[int] = None) -> torch.Tensor:
         """
-        Sample sequences using the proper PC sampler.
-        
+        Sample sequences using the proper PC sampler with optional batching.
+
         Args:
             checkpoint_path: Path to checkpoint file
             config: Configuration object
@@ -127,28 +128,72 @@ class BaseSampler:
             steps: Number of sampling steps
             architecture: Architecture type
             conditioning_labels: Optional conditioning labels (if None, generates random)
-            
+            sampling_batch_size: Batch size for sampling (None = smart default: 256 for >512 samples)
+
         Returns:
             Sampled sequences tensor
         """
         # Load model using dataset-specific method
         model, graph, noise = self.load_model(checkpoint_path, config, architecture)
         model.eval()
-        
+
         sequence_length = self.get_sequence_length(config)
-        
+
         # Generate conditioning labels if not provided
         if conditioning_labels is None:
             conditioning_labels = self.generate_conditioning_labels(num_samples, config)
-        
-        # Create PC sampler
-        sampling_fn = sampling.get_pc_sampler(
-            graph, noise, (num_samples, sequence_length), 'analytic', steps, device=self.device
-        )
-        
-        # Sample sequences
-        sampled_sequences = sampling_fn(model, conditioning_labels.to(self.device))
-        
+
+        # Determine batch size using smart defaults
+        if sampling_batch_size is None:
+            # Smart default: batch large jobs to avoid memory issues
+            sampling_batch_size = 256 if num_samples > 512 else num_samples
+
+        # If batch size equals num_samples, do single-batch sampling (original behavior)
+        if sampling_batch_size >= num_samples:
+            sampling_fn = sampling.get_pc_sampler(
+                graph, noise, (num_samples, sequence_length), 'analytic', steps, device=self.device
+            )
+            sampled_sequences = sampling_fn(model, conditioning_labels.to(self.device))
+            return sampled_sequences
+
+        # Batched sampling to avoid flash attention memory issues
+        num_batches = (num_samples + sampling_batch_size - 1) // sampling_batch_size
+        all_sequences = []
+
+        print(f"Sampling {num_samples} sequences in {num_batches} batches of {sampling_batch_size}")
+
+        for i in range(num_batches):
+            start_idx = i * sampling_batch_size
+            end_idx = min((i + 1) * sampling_batch_size, num_samples)
+            current_batch_size = end_idx - start_idx
+
+            # Get labels for this batch
+            batch_labels = None
+            if conditioning_labels is not None:
+                batch_labels = conditioning_labels[start_idx:end_idx]
+
+            # Create sampling function for this batch
+            sampling_fn = sampling.get_pc_sampler(
+                graph, noise, (current_batch_size, sequence_length),
+                'analytic', steps, device=self.device
+            )
+
+            # Generate sequences for this batch
+            with torch.no_grad():
+                batch_sequences = sampling_fn(model, batch_labels)
+
+            # Keep on GPU for memory efficiency
+            all_sequences.append(batch_sequences)
+
+            # Periodic GPU cache clearing to avoid memory fragmentation
+            if i > 0 and i % 15 == 0:
+                torch.cuda.empty_cache()
+
+            print(f"Completed batch {i+1}/{num_batches} ({end_idx}/{num_samples} sequences)")
+
+        # Concatenate all batches on GPU, then move to CPU
+        sampled_sequences = torch.cat(all_sequences, dim=0)
+
         return sampled_sequences
     
     
@@ -223,10 +268,11 @@ class BaseSampler:
     
     def sample_and_save(self, checkpoint_path: str, config: OmegaConf, num_samples: int, steps: int,
                        architecture: str = 'transformer', conditioning_labels: Optional[torch.Tensor] = None,
-                       output_path: Optional[str] = None, format: str = 'npz') -> Dict[str, Any]:
+                       output_path: Optional[str] = None, format: str = 'npz',
+                       sampling_batch_size: Optional[int] = None) -> Dict[str, Any]:
         """
         Main sampling method - just samples and saves (no evaluation).
-        
+
         Args:
             checkpoint_path: Path to checkpoint file
             config: Configuration object
@@ -236,15 +282,16 @@ class BaseSampler:
             conditioning_labels: Optional conditioning labels
             output_path: Output file path (optional, auto-generated if None)
             format: Output format ('npz', 'fasta', 'csv')
-            
+            sampling_batch_size: Batch size for sampling (None = smart default)
+
         Returns:
             Dictionary of sampling results
         """
         print(f"Sampling {num_samples} {self.dataset_name} sequences using PC sampler with {steps} steps...")
-        
+
         # Sample sequences
         sampled_sequences = self.sample_sequences_with_pc_sampler(
-            checkpoint_path, config, num_samples, steps, architecture, conditioning_labels
+            checkpoint_path, config, num_samples, steps, architecture, conditioning_labels, sampling_batch_size
         )
         
         results = {

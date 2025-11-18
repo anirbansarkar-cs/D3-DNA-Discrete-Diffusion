@@ -99,7 +99,6 @@ def main():
     parser.add_argument('--expression_target', type=float, help='Expression target value (if not provided, uses random)')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
     parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
-    parser.add_argument('--sampling_batch_size', type=int, default=256, help='Batch size for sampling (to avoid flash attention memory issues on H100)')
     args = parser.parse_args()
     
     # Load config if not provided
@@ -120,11 +119,6 @@ def main():
     config = OmegaConf.load(args.config)
     sampler = PromoterSampler()
 
-    # Load model once
-    print(f"Loading Promoter {args.architecture} model from {args.checkpoint}")
-    model, graph, noise = sampler.load_model(args.checkpoint, config, args.architecture)
-    model.eval()
-
     # Get sequence length
     seq_length = sampler.get_sequence_length(config)
 
@@ -142,7 +136,7 @@ def main():
             if not args.data_path:
                 print("Error: --data_path is required when using --use_test_set")
                 return 1
-            
+
             # Load test dataset to get labels
             from model_zoo.promoter.data import PromoterDataset
             test_dataset = PromoterDataset(args.data_path, split='test')
@@ -162,43 +156,18 @@ def main():
     else:
         print("Sampling unconditionally (no conditioning labels)")
 
-    # Sample in batches to avoid flash attention memory issues on H100
-    batch_size = args.sampling_batch_size
-    num_batches = (num_samples + batch_size - 1) // batch_size
-    all_sequences = []
-
-    print(f"Sampling {num_samples} sequences in {num_batches} batches of {batch_size}")
-
-    for i in range(num_batches):
-        start_idx = i * batch_size
-        end_idx = min((i + 1) * batch_size, num_samples)
-        current_batch_size = end_idx - start_idx
-
-        # Get labels for this batch
-        batch_labels = None
-        if conditioning_labels is not None:
-            batch_labels = conditioning_labels[start_idx:end_idx]
-
-        # Create sampling function for this batch
-        from scripts import sampling
-        sampling_fn = sampling.get_pc_sampler(
-            graph,
-            noise,
-            (current_batch_size, seq_length),
-            'analytic',  # Predictor type
-            steps,
-            device=sampler.device
-        )
-
-        # Generate sequences for this batch
-        with torch.no_grad():
-            batch_sequences = sampling_fn(model, batch_labels)
-
-        all_sequences.append(batch_sequences)
-        print(f"Completed batch {i+1}/{num_batches} ({end_idx}/{num_samples} sequences)")
-
-    # Concatenate all batches
-    sequences = torch.cat(all_sequences, dim=0)
+    # Use base class batched sampling (handles flash attention memory issues automatically)
+    # Smart defaults: automatically batches with size 256 when num_samples > 512
+    print(f"Loading Promoter {args.architecture} model from {args.checkpoint}")
+    sequences = sampler.sample_sequences_with_pc_sampler(
+        checkpoint_path=args.checkpoint,
+        config=config,
+        num_samples=num_samples,
+        steps=steps,
+        architecture=args.architecture,
+        conditioning_labels=conditioning_labels
+        # No sampling_batch_size - uses automatic smart defaults from base class
+    )
 
     # Save sequences if output path provided
     if args.output:
