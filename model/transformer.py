@@ -87,6 +87,9 @@ class DDiTBlock(nn.Module):
             cos, sin = rotary_cos_sin
             qkv = rotary.apply_rotary_pos_emb(qkv, cos.to(qkv.dtype), sin.to(qkv.dtype))
 
+        # Ensure QKV is contiguous for flash attention (critical for H100 GPUs)
+        qkv = qkv.contiguous()
+
         # Flash attention - use appropriate version based on sequence length variability
         if seqlens is None:
             # Fixed-length sequences: use standard flash attention
@@ -128,7 +131,15 @@ class EmbeddingLayer(nn.Module):
         vocab_embed = self.embedding[x] #return only this if label embedding is used
         if y is not None:
             signal_embed = self.signal_embedding(y.to(torch.float32))
-            return torch.add(vocab_embed, signal_embed[:, None, :]) #[:, None, :] extra for deepstarr
+            # Handle both global conditioning (2D labels) and per-position conditioning (3D labels)
+            if signal_embed.dim() == 2:
+                # Global conditioning: (batch, dim) -> (batch, 1, dim) -> broadcast to (batch, seq_len, dim)
+                result = torch.add(vocab_embed, signal_embed[:, None, :])
+            else:
+                # Per-position conditioning: (batch, seq_len, dim) -> add directly
+                result = torch.add(vocab_embed, signal_embed)
+            # Ensure contiguous memory layout for flash attention
+            return result.contiguous()
         else:
             # For unconditional generation, return only vocab embedding
             return vocab_embed
