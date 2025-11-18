@@ -45,28 +45,41 @@ class PromoterSampler(BaseSampler):
         return 1024  # Promoter default sequence length
     
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for Promoter sampling."""
-        # Promoter dataset has expression targets
-        # For sampling, we generate random target expression values
-        # This should match the expected conditioning format for Promoter models
-        
+        """
+        Generate conditioning labels for Promoter sampling.
+
+        Promoter uses per-position regulatory activity labels by default,
+        where each position has a signal_dim-dimensional regulatory signal.
+        For promoter: signal_dim=1 and per-position conditioning is used.
+
+        Args:
+            num_samples: Number of samples to generate labels for
+            config: Configuration object containing dataset and model parameters
+
+        Returns:
+            Conditioning labels tensor
+        """
         seq_length = self.get_sequence_length(config)
-        
-        # Check if the model expects per-position targets or global targets
-        # This may need adjustment based on the specific Promoter model configuration
-        if hasattr(config, 'model') and hasattr(config.model, 'target_dim'):
-            target_dim = config.model.target_dim
+
+        # Get signal_dim from dataset config (dimensionality of regulatory signal per position)
+        if hasattr(config, 'dataset') and hasattr(config.dataset, 'signal_dim'):
+            signal_dim = config.dataset.signal_dim
         else:
-            target_dim = 1  # Default assumption
-        
-        # Generate random expression targets
-        if target_dim == 1:
-            # Global target for the entire sequence
-            labels = torch.randn(num_samples, target_dim, device=self.device) * 2.0
+            signal_dim = 1  # Default for promoter
+
+        # Check if global conditioning is requested (single value for entire sequence)
+        # Otherwise, use per-position conditioning (default for promoter)
+        use_global = getattr(config.model, 'use_global_conditioning', False) if hasattr(config, 'model') else False
+
+        if use_global:
+            # Global conditioning: single regulatory value for entire sequence
+            # Shape: (num_samples, signal_dim)
+            labels = torch.randn(num_samples, signal_dim, device=self.device) * 2.0
         else:
-            # Per-position targets (less common but possible)
-            labels = torch.randn(num_samples, seq_length, target_dim, device=self.device) * 2.0
-            
+            # Per-position conditioning: regulatory value at each position
+            # Shape: (num_samples, seq_length, signal_dim)
+            labels = torch.randn(num_samples, seq_length, signal_dim, device=self.device) * 2.0
+
         return labels
 
 
