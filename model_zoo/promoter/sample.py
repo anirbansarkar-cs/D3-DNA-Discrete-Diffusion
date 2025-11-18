@@ -99,7 +99,7 @@ def main():
     parser.add_argument('--expression_target', type=float, help='Expression target value (if not provided, uses random)')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
     parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
-    parser.add_argument('--batch_size', type=int, default=256, help='Batch size for sampling (to avoid flash attention memory issues on H100)')
+    parser.add_argument('--sampling_batch_size', type=int, default=256, help='Batch size for sampling (to avoid flash attention memory issues on H100)')
     args = parser.parse_args()
     
     # Load config if not provided
@@ -150,7 +150,7 @@ def main():
         print("Sampling unconditionally (no conditioning labels)")
 
     # Sample in batches to avoid flash attention memory issues on H100
-    batch_size = args.batch_size
+    batch_size = args.sampling_batch_size
     num_batches = (num_samples + batch_size - 1) // batch_size
     all_sequences = []
 
