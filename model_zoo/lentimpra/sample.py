@@ -165,7 +165,8 @@ def main():
         architecture=architecture,
         conditioning_labels=conditioning_labels,
         output_path=args.output,
-        format=args.format
+        format=args.format,
+        encoding=args.sequence_encoding
     )
     
     # Print results

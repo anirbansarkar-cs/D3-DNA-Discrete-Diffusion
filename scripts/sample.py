@@ -213,34 +213,58 @@ class BaseSampler:
             sequences_str.append(seq_str)
         return sequences_str
     
-    def save_sequences(self, sequences: torch.Tensor, output_path: str, format: str = 'npz'):
+    def save_sequences(self, sequences: torch.Tensor, output_path: str, format: str = 'npz',
+                      encoding: str = 'index'):
         """
         Save generated sequences to file.
-        
+
         Args:
-            sequences: Generated sequences
+            sequences: Generated sequences (as indices)
             output_path: Output file path
-            format: Output format ('npz', 'fasta', or 'csv')
+            format: Output format ('npz', 'fasta', 'csv', 'h5', 'pt')
+            encoding: Sequence encoding ('index' or 'onehot')
+                     - 'index': Save as integer indices (N, L) where values are 0,1,2,3 for A,C,G,T
+                     - 'onehot': Save as one-hot encoding (N, L, 4)
         """
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # Convert to one-hot if requested
+        if encoding == 'onehot':
+            # Check if already one-hot (has 3 dimensions)
+            if sequences.dim() == 2:
+                # Convert from indices (N, L) to one-hot (N, L, 4)
+                sequences = F.one_hot(sequences.long(), num_classes=4).float()
+                print(f"Converting sequences to one-hot encoding: {sequences.shape}")
+        elif encoding == 'index':
+            # Ensure sequences are indices (2D)
+            if sequences.dim() == 3:
+                # Convert from one-hot (N, L, 4) to indices (N, L)
+                sequences = torch.argmax(sequences, dim=-1)
+                print(f"Converting sequences to index encoding: {sequences.shape}")
+        else:
+            raise ValueError(f"Invalid encoding: {encoding}. Must be 'index' or 'onehot'")
         
         if format.lower() == 'npz':
             # Save as numpy array (matches original implementation)
             np.savez(output_path, sequences.cpu().numpy())
-            print(f"Sequences saved to: {output_path}")
-            
+            print(f"Sequences saved to: {output_path} (encoding: {encoding})")
+
         elif format.lower() == 'fasta':
             # Convert to strings and save as FASTA
-            sequences_str = self.sequences_to_strings(sequences)
+            # For FASTA, we need indices for string conversion
+            seq_for_strings = sequences if sequences.dim() == 2 else torch.argmax(sequences, dim=-1)
+            sequences_str = self.sequences_to_strings(seq_for_strings)
             with open(output_path, 'w') as f:
                 for i, seq_str in enumerate(sequences_str):
                     f.write(f">{self.dataset_name}_sequence_{i}\n")
                     f.write(f"{seq_str}\n")
             print(f"Sequences saved to: {output_path}")
-            
+
         elif format.lower() == 'csv':
             # Convert to strings and save as CSV
-            sequences_str = self.sequences_to_strings(sequences)
+            # For CSV, we need indices for string conversion
+            seq_for_strings = sequences if sequences.dim() == 2 else torch.argmax(sequences, dim=-1)
+            sequences_str = self.sequences_to_strings(seq_for_strings)
             with open(output_path, 'w') as f:
                 f.write("sequence_id,sequence\n")
                 for i, seq_str in enumerate(sequences_str):
@@ -257,11 +281,11 @@ class BaseSampler:
                 else:
                     representations_data = sequences.cpu().numpy()
                 f.create_dataset("representations", data=representations_data)
-            print(f"Representations saved as HDF5 to: {output_path}")
+            print(f"Sequences saved as HDF5 to: {output_path} (encoding: {encoding}, shape: {sequences.shape})")
         elif format == "pt":
             # PyTorch native format - supports float8 natively (if available)
             torch.save(sequences, output_path)
-            print(f"Representations saved as PyTorch tensor (dtype: {sequences.dtype}) to: {output_path}")
+            print(f"Sequences saved as PyTorch tensor to: {output_path} (dtype: {sequences.dtype}, encoding: {encoding}, shape: {sequences.shape})")
             
         else:
             raise ValueError(f"Unsupported format: {format}")
@@ -269,7 +293,7 @@ class BaseSampler:
     def sample_and_save(self, checkpoint_path: str, config: OmegaConf, num_samples: int, steps: int,
                        architecture: str = 'transformer', conditioning_labels: Optional[torch.Tensor] = None,
                        output_path: Optional[str] = None, format: str = 'npz',
-                       sampling_batch_size: Optional[int] = None) -> Dict[str, Any]:
+                       sampling_batch_size: Optional[int] = None, encoding: str = 'index') -> Dict[str, Any]:
         """
         Main sampling method - just samples and saves (no evaluation).
 
@@ -281,8 +305,9 @@ class BaseSampler:
             architecture: Architecture type
             conditioning_labels: Optional conditioning labels
             output_path: Output file path (optional, auto-generated if None)
-            format: Output format ('npz', 'fasta', 'csv')
+            format: Output format ('npz', 'fasta', 'csv', 'h5', 'pt')
             sampling_batch_size: Batch size for sampling (None = smart default)
+            encoding: Sequence encoding ('index' or 'onehot')
 
         Returns:
             Dictionary of sampling results
@@ -293,23 +318,24 @@ class BaseSampler:
         sampled_sequences = self.sample_sequences_with_pc_sampler(
             checkpoint_path, config, num_samples, steps, architecture, conditioning_labels, sampling_batch_size
         )
-        
+
         results = {
             'num_samples': sampled_sequences.shape[0],
             'sequence_length': sampled_sequences.shape[1],
             'sampling_steps': steps,
-            'dataset': self.dataset_name
+            'dataset': self.dataset_name,
+            'encoding': encoding
         }
-        
+
         # Save sequences
         if output_path is None:
             # Extract directory from checkpoint path for output
             checkpoint_dir = os.path.dirname(checkpoint_path)
             output_path = os.path.join(checkpoint_dir, f"sample.{format}")
-        
-        self.save_sequences(sampled_sequences, output_path, format)
+
+        self.save_sequences(sampled_sequences, output_path, format, encoding)
         results['output_path'] = output_path
-        
+
         return results
 
 
@@ -439,7 +465,9 @@ def parse_base_args():
     parser.add_argument('--output', help='Output file path')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size for sampling')
     parser.add_argument('--format', choices=['npz', 'fasta', 'csv', 'h5', 'hdf5', 'pt'], default='h5', help='Output format')
-    
+    parser.add_argument('--sequence_encoding', choices=['index', 'onehot'], default='index',
+                       help='Sequence encoding: "index" for integer indices (0-3 for A,C,G,T) or "onehot" for one-hot encoding')
+
     return parser
 
 
@@ -502,7 +530,8 @@ def main_sample(sampler: BaseSampler, args):
         steps=steps,
         architecture=args.architecture,
         output_path=args.output,
-        format=args.format
+        format=args.format,
+        encoding=args.sequence_encoding
     )
     
     # Print results

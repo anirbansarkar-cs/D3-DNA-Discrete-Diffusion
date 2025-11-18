@@ -172,11 +172,12 @@ def main():
 
     # Save sequences if output path provided
     if args.output:
-        sampler.save_sequences(sequences, args.output, args.format)
+        sampler.save_sequences(sequences, args.output, args.format, args.sequence_encoding)
         results = {
             'num_sequences': len(sequences),
             'sequence_length': seq_length,
-            'output_file': args.output
+            'output_file': args.output,
+            'encoding': args.sequence_encoding
         }
     else:
         results = {
