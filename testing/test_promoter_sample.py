@@ -63,7 +63,8 @@ class TestPromoterSampler(unittest.TestCase):
         # Check shape: (num_samples, signal_dim) for global conditioning
         self.assertEqual(labels.shape, (num_samples, 1),
                         f"Labels shape should be ({num_samples}, 1), got {labels.shape}")
-        self.assertEqual(labels.device.type, self.device.type,
+        expected_device = torch.device(self.device) if isinstance(self.device, str) else self.device
+        self.assertEqual(labels.device.type, expected_device.type,
                         "Labels should be on correct device")
         self.assertTrue(torch.is_tensor(labels), "Labels should be a torch tensor")
 
@@ -158,6 +159,7 @@ class TestPromoterSamplingConditioning(unittest.TestCase):
         test_args = [
             'sample.py',
             '--checkpoint', 'test.ckpt',
+            '--architecture', 'transformer',
             '--num_samples', '10',
             '--config', 'test_config.yaml'
         ]
@@ -196,6 +198,7 @@ class TestPromoterSamplingConditioning(unittest.TestCase):
         test_args = [
             'sample.py',
             '--checkpoint', 'test.ckpt',
+            '--architecture', 'transformer',
             '--num_samples', '5',
             '--config', 'test_config.yaml',
             '--expression_target', '3.5'
@@ -230,6 +233,7 @@ class TestPromoterSamplingConditioning(unittest.TestCase):
         test_args = [
             'sample.py',
             '--checkpoint', 'test.ckpt',
+            '--architecture', 'transformer',
             '--num_samples', '3',
             '--config', 'test_config.yaml',
             '--unconditional'
@@ -245,7 +249,7 @@ class TestPromoterSamplingConditioning(unittest.TestCase):
         self.assertIsNone(call_kwargs['conditioning_labels'],
                          "Unconditional sampling should have None for conditioning_labels")
 
-    @patch('model_zoo.promoter.sample.PromoterDataset')
+    @patch('model_zoo.promoter.data.PromoterDataset')
     @patch('model_zoo.promoter.sample.PromoterSampler.sample_and_save')
     @patch('model_zoo.promoter.sample.OmegaConf.load')
     def test_test_set_conditioning(self, mock_config_load, mock_sample_and_save, mock_dataset_class):
@@ -269,6 +273,7 @@ class TestPromoterSamplingConditioning(unittest.TestCase):
         test_args = [
             'sample.py',
             '--checkpoint', 'test.ckpt',
+            '--architecture', 'transformer',
             '--num_samples', '10',  # Should be overridden
             '--config', 'test_config.yaml',
             '--use_test_set',
