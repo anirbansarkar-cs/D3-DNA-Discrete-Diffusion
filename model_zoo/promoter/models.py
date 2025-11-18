@@ -24,8 +24,17 @@ class PromoterEmbeddingLayer(torch.nn.Module):
         torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
     def forward(self, x, y):
-        vocab_embed = self.embedding[x]
-        signal_embed = self.signal_embedding(y)
+        vocab_embed = self.embedding[x]  # Shape: (batch, seq_len, hidden_size)
+        signal_embed = self.signal_embedding(y)  # Shape: (batch, seq_len, hidden_size) or (batch, hidden_size)
+
+        # Handle both global and per-position conditioning
+        # Global: y has shape (batch, signal_dim) -> signal_embed has shape (batch, hidden_size)
+        # Per-position: y has shape (batch, seq_len, signal_dim) -> signal_embed has shape (batch, seq_len, hidden_size)
+        if signal_embed.dim() == 2:
+            # Global conditioning: expand to match sequence dimension
+            # (batch, hidden_size) -> (batch, 1, hidden_size) -> broadcasts to (batch, seq_len, hidden_size)
+            signal_embed = signal_embed.unsqueeze(1)
+
         return torch.add(vocab_embed, signal_embed)
 
 
