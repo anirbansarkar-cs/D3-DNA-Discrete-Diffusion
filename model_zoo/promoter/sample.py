@@ -73,6 +73,7 @@ class PromoterSampler(BaseSampler):
 
         if use_global:
             # Global conditioning: single regulatory value for entire sequence
+            # TODO: should include a check for the architecture (should have been trained with same shape of labels)
             # Shape: (num_samples, signal_dim)
             labels = torch.randn(num_samples, signal_dim, device=self.device) * 2.0
         else:

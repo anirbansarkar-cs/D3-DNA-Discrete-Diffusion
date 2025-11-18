@@ -42,10 +42,15 @@ class LentIMPRASampler(BaseSampler):
         return 230  # LentIMPRA fixed sequence length
     
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for LentIMPRA sampling."""
-        # LentIMPRA has single regression target for regulatory activity
+        """Generate conditioning labels for LentIMPRA sampling.
+
+        Supports both single-class (N, 1) and multi-class (N, 3) based on config.
+        """
+        # Check signal dimension from config (1 for single-class, 3 for multi-class)
+        signal_dim = config.dataset.get('signal_dim', 1)
+
         # Generate random activities in a reasonable range
-        labels = torch.randn(num_samples, 1, device=self.device)
+        labels = torch.randn(num_samples, signal_dim, device=self.device)
         return labels
 
 
@@ -62,7 +67,10 @@ def main():
     # Parse arguments using base framework
     parser = parse_base_args()
     # Add LentIMPRA-specific conditioning arguments
-    parser.add_argument('--activity', type=float, help='Regulatory activity value (if not provided, uses random)')
+    parser.add_argument('--activity', type=float, help='Regulatory activity value for single-class models (if not provided, uses random)')
+    parser.add_argument('--k562_activity', type=float, help='K562 activity value for multi-class models')
+    parser.add_argument('--hepg2_activity', type=float, help='HepG2 activity value for multi-class models')
+    parser.add_argument('--wtc11_activity', type=float, help='WTC11 activity value for multi-class models')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
     parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
     args = parser.parse_args()
@@ -84,7 +92,10 @@ def main():
     
     config = OmegaConf.load(args.config)
     sampler = LentIMPRASampler()
-    
+
+    # Determine signal dimension from config (1 for single-class, 3 for multi-class)
+    signal_dim = config.dataset.get('signal_dim', 1)
+
     # Generate conditioning labels based on arguments
     conditioning_labels = None
     num_samples = args.num_samples
@@ -103,14 +114,33 @@ def main():
             num_samples = len(test_dataset)
             print(f"Using test set labels: {num_samples} samples with shape {conditioning_labels.shape}")
 
-        elif args.activity is not None:
-            # User-specified activity
+        elif signal_dim == 1 and args.activity is not None:
+            # Single-class: user-specified activity
             conditioning_labels = torch.tensor([[args.activity]], device=sampler.device).expand(num_samples, -1)
             print(f"Using specified activity: {args.activity}")
+
+        elif signal_dim == 3:
+            # Multi-class: check if all three activities are specified
+            multi_class_activities = [args.k562_activity, args.hepg2_activity, args.wtc11_activity]
+            if all(a is not None for a in multi_class_activities):
+                # All three activities specified
+                conditioning_labels = torch.tensor(
+                    [[args.k562_activity, args.hepg2_activity, args.wtc11_activity]],
+                    device=sampler.device
+                ).expand(num_samples, -1)
+                print(f"Using specified activities - K562: {args.k562_activity}, HepG2: {args.hepg2_activity}, WTC11: {args.wtc11_activity}")
+            elif any(a is not None for a in multi_class_activities):
+                # Some but not all activities specified - this is an error
+                print("Error: For multi-class models, either specify all three activities (--k562_activity, --hepg2_activity, --wtc11_activity) or none")
+                return 1
+            else:
+                # No activities specified, use random
+                conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
+                print(f"Using random activities (multi-class, {signal_dim} dimensions)")
         else:
             # Random activity (default behavior)
             conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
-            print("Using random activities")
+            print(f"Using random activities ({signal_dim} dimension{'s' if signal_dim > 1 else ''})")
     else:
         print("Sampling unconditionally (no conditioning labels)")
     
@@ -119,14 +149,20 @@ def main():
     if steps is None:
         steps = sampler.get_sequence_length(config)
         print(f"Using default steps: {steps} (sequence length)")
-    
+
+    # Auto-detect architecture for multi-class models
+    architecture = args.architecture
+    if signal_dim > 1 and architecture == 'transformer':
+        architecture = 'transformer_multi_class'
+        print(f"Auto-detected multi-class model (signal_dim={signal_dim}), using architecture: {architecture}")
+
     # Run sampling only (no evaluation)
     results = sampler.sample_and_save(
         checkpoint_path=args.checkpoint,
         config=config,
         num_samples=num_samples,
         steps=steps,
-        architecture=args.architecture,
+        architecture=architecture,
         conditioning_labels=conditioning_labels,
         output_path=args.output,
         format=args.format
