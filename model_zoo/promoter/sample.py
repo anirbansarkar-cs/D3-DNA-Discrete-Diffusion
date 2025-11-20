@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
 from typing import Optional
 import numpy as np
+import h5py
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -100,6 +101,10 @@ def main():
     parser.add_argument('--expression_target', type=float, help='Expression target value (if not provided, uses random)')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
     parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
+    parser.add_argument('--save_elements', type=str, nargs='+', default=None,
+                       choices=['sequence', 'score', 'stag_score', 'prob'],
+                       help='List of elements to save during sampling: sequence, score, stag_score, prob. '
+                            'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     args = parser.parse_args()
     
     # Load config if not provided
@@ -160,15 +165,23 @@ def main():
     # Use base class batched sampling (handles flash attention memory issues automatically)
     # Smart defaults: automatically batches with size 256 when num_samples > 512
     print(f"Loading Promoter {args.architecture} model from {args.checkpoint}")
-    sequences = sampler.sample_sequences_with_pc_sampler(
+    result = sampler.sample_sequences_with_pc_sampler(
         checkpoint_path=args.checkpoint,
         config=config,
         num_samples=num_samples,
         steps=steps,
         architecture=args.architecture,
-        conditioning_labels=conditioning_labels
+        conditioning_labels=conditioning_labels,
+        save_elements_list=args.save_elements
         # No sampling_batch_size - uses automatic smart defaults from base class
     )
+    
+    # Handle returned result (may be just sequences or (sequences, saved_elements))
+    if isinstance(result, tuple):
+        sequences, saved_elements = result
+    else:
+        sequences = result
+        saved_elements = None
 
     # Save sequences if output path provided
     if args.output:
@@ -184,6 +197,38 @@ def main():
             'num_sequences': len(sequences),
             'sequence_length': seq_length
         }
+    
+    # Save elements if requested
+    if saved_elements:
+        # Determine output directory (use same directory as sequence output if provided)
+        if args.output:
+            output_dir = Path(args.output).parent
+            base_name = Path(args.output).stem
+        else:
+            output_dir = Path('.')
+            base_name = 'promoter_samples'
+        
+        # Save all elements as datasets in a single HDF5 file
+        output_file = output_dir / f"{base_name}_elements.h5"
+        
+        print(f"\nSaving sampling elements to {output_file}...")
+        with h5py.File(output_file, 'w') as f:
+            for elem_name, elem_tensor in saved_elements.items():
+                # elem_tensor shape: (N, L, T, 4)
+                f.create_dataset(elem_name, data=elem_tensor.numpy(), compression='gzip')
+                print(f"  Saved dataset '{elem_name}': shape {elem_tensor.shape}")
+            
+            # Save metadata as attributes
+            first_elem = list(saved_elements.values())[0]
+            f.attrs['num_samples'] = first_elem.shape[0]
+            f.attrs['sequence_length'] = first_elem.shape[1]
+            f.attrs['num_timesteps'] = first_elem.shape[2]
+            f.attrs['num_classes'] = first_elem.shape[3]
+            f.attrs['saved_elements'] = list(saved_elements.keys())
+        
+        print(f"  All elements saved to: {output_file}")
+        results['saved_elements_file'] = str(output_file)
+        results['saved_elements'] = list(saved_elements.keys())
     
     # Print results
     print(f"\nPromoter Sampling Results:")

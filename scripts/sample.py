@@ -12,7 +12,7 @@ import os
 import sys
 import argparse
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 import numpy as np
 
 import torch
@@ -117,7 +117,8 @@ class BaseSampler:
     def sample_sequences_with_pc_sampler(self, checkpoint_path: str, config: OmegaConf,
                                        num_samples: int, steps: int, architecture: str = 'transformer',
                                        conditioning_labels: Optional[torch.Tensor] = None,
-                                       sampling_batch_size: Optional[int] = None) -> torch.Tensor:
+                                       sampling_batch_size: Optional[int] = None,
+                                       save_elements_list: Optional[list] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Sample sequences using the proper PC sampler with optional batching.
 
@@ -151,14 +152,25 @@ class BaseSampler:
         # If batch size equals num_samples, do single-batch sampling (original behavior)
         if sampling_batch_size >= num_samples:
             sampling_fn = sampling.get_pc_sampler(
-                graph, noise, (num_samples, sequence_length), 'analytic', steps, device=self.device
+                graph, noise, (num_samples, sequence_length), 'analytic', steps, 
+                device=self.device, save_elements_list=save_elements_list
             )
-            sampled_sequences = sampling_fn(model, conditioning_labels.to(self.device))
+            result = sampling_fn(model, conditioning_labels.to(self.device))
+            if isinstance(result, tuple):
+                sampled_sequences, saved_elements = result
+                # Convert saved_elements to proper format (N, L, T, 4)
+                processed_elements = self._process_saved_elements(saved_elements, num_samples, sequence_length, steps)
+                if save_elements_list:
+                    return sampled_sequences, processed_elements
+            if save_elements_list:
+                # No saved elements returned but save_elements_list was requested - return None
+                return sampled_sequences, {}
             return sampled_sequences
 
         # Batched sampling to avoid flash attention memory issues
         num_batches = (num_samples + sampling_batch_size - 1) // sampling_batch_size
         all_sequences = []
+        all_saved_elements = [] if save_elements_list else None
 
         print(f"Sampling {num_samples} sequences in {num_batches} batches of {sampling_batch_size}")
 
@@ -175,12 +187,17 @@ class BaseSampler:
             # Create sampling function for this batch
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (current_batch_size, sequence_length),
-                'analytic', steps, device=self.device
+                'analytic', steps, device=self.device, save_elements_list=save_elements_list
             )
 
             # Generate sequences for this batch
             with torch.no_grad():
-                batch_sequences = sampling_fn(model, batch_labels)
+                result = sampling_fn(model, batch_labels)
+                if isinstance(result, tuple):
+                    batch_sequences, batch_saved_elements = result
+                    all_saved_elements.append(batch_saved_elements)
+                else:
+                    batch_sequences = result
 
             # Keep on GPU for memory efficiency
             all_sequences.append(batch_sequences)
@@ -193,9 +210,81 @@ class BaseSampler:
 
         # Concatenate all batches on GPU, then move to CPU
         sampled_sequences = torch.cat(all_sequences, dim=0)
+        
+        # Process and concatenate saved elements if present
+        if all_saved_elements:
+            # Combine saved elements from all batches
+            combined_saved_elements = {}
+            for elem_name in save_elements_list:
+                combined_saved_elements[elem_name] = []
+                for batch_elements in all_saved_elements:
+                    if elem_name in batch_elements:
+                        combined_saved_elements[elem_name].extend(batch_elements[elem_name])
+            
+            # Convert to proper format (N, L, T, 4)
+            processed_elements = self._process_saved_elements(combined_saved_elements, num_samples, sequence_length, steps)
+            return sampled_sequences, processed_elements
 
+        if save_elements_list:
+            return sampled_sequences, {}
         return sampled_sequences
     
+    def _process_saved_elements(self, saved_elements: Dict[str, List[torch.Tensor]], 
+                                num_samples: int, sequence_length: int, steps: int) -> Dict[str, torch.Tensor]:
+        """
+        Process saved elements into (N, L, T, 4) format.
+        
+        Args:
+            saved_elements: Dict mapping element names to lists of tensors (one per timestep)
+            num_samples: Number of sequences (N)
+            sequence_length: Sequence length (L)
+            steps: Number of timesteps (T)
+            
+        Returns:
+            Dict mapping element names to tensors of shape (N, L, T, 4)
+        """
+        processed = {}
+        # Number of timesteps: steps (predictor steps) + 1 (denoiser step if enabled, or final state)
+        # The saved elements should have steps+1 items
+        num_timesteps = len(list(saved_elements.values())[0]) if saved_elements else steps + 1
+        
+        for elem_name, elem_list in saved_elements.items():
+            if not elem_list:
+                continue
+                
+            # Stack along timestep dimension
+            # elem_list contains T tensors, each of shape (N, L) or (N, L, 4)
+            stacked = torch.stack(elem_list, dim=2)  # Stack along dim 2 -> (N, L, T) or (N, L, T, 4)
+            
+            if elem_name == 'sequence':
+                # Convert indices to one-hot: (N, L, T) -> (N, L, T, 4)
+                if stacked.dim() == 3:  # (N, L, T) - indices
+                    stacked = F.one_hot(stacked.long(), num_classes=4).float()  # (N, L, T, 4)
+                elif stacked.dim() == 4 and stacked.shape[-1] != 4:
+                    # Already stacked but need to convert to one-hot
+                    # If it's (N, L, T, 1) or something, reshape and convert
+                    stacked = F.one_hot(stacked.squeeze(-1).long(), num_classes=4).float()
+                # If already (N, L, T, 4), use as is
+            elif elem_name in ['score', 'stag_score', 'prob']:
+                # These should already be (N, L, 4) per timestep, so stacked -> (N, L, T, 4)
+                if stacked.dim() == 3:
+                    # If somehow (N, L, T), we need to expand to (N, L, T, 4)
+                    # This shouldn't happen, but handle it
+                    stacked = stacked.unsqueeze(-1).expand(-1, -1, -1, 4)
+                # If already (N, L, T, 4), use as is
+            
+            # Ensure correct shape
+            actual_timesteps = stacked.shape[2]
+            if stacked.shape[:2] != (num_samples, sequence_length) or stacked.shape[3] != 4:
+                # Try to reshape if possible
+                if stacked.numel() == num_samples * sequence_length * actual_timesteps * 4:
+                    stacked = stacked.view(num_samples, sequence_length, actual_timesteps, 4)
+                else:
+                    print(f"Warning: {elem_name} shape {stacked.shape} doesn't match expected pattern")
+            
+            processed[elem_name] = stacked.cpu()
+        
+        return processed
     
     def sequences_to_strings(self, sequences: torch.Tensor) -> List[str]:
         """
