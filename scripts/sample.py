@@ -158,10 +158,19 @@ class BaseSampler:
             result = sampling_fn(model, conditioning_labels.to(self.device))
             if isinstance(result, tuple):
                 sampled_sequences, saved_elements = result
-                # Convert saved_elements to proper format (N, L, T, 4)
+                # Convert saved_elements to proper format (N, L, T, 4) and move to CPU
                 processed_elements = self._process_saved_elements(saved_elements, num_samples, sequence_length, steps)
+                # Move sequences to CPU to free GPU memory
+                sampled_sequences = sampled_sequences.cpu()
+                del saved_elements
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 if save_elements_list:
                     return sampled_sequences, processed_elements
+            # Move sequences to CPU even if no saved elements
+            sampled_sequences = sampled_sequences.cpu()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             if save_elements_list:
                 # No saved elements returned but save_elements_list was requested - return None
                 return sampled_sequences, {}
@@ -169,8 +178,13 @@ class BaseSampler:
 
         # Batched sampling to avoid flash attention memory issues
         num_batches = (num_samples + sampling_batch_size - 1) // sampling_batch_size
-        all_sequences = []
-        all_saved_elements = [] if save_elements_list else None
+        all_sequences = []  # Will store CPU tensors
+        all_saved_elements_processed = {} if save_elements_list else None  # Will store processed CPU tensors
+        
+        # Initialize structure for accumulating saved elements
+        if save_elements_list:
+            for elem_name in save_elements_list:
+                all_saved_elements_processed[elem_name] = []
 
         print(f"Sampling {num_samples} sequences in {num_batches} batches of {sampling_batch_size}")
 
@@ -195,35 +209,43 @@ class BaseSampler:
                 result = sampling_fn(model, batch_labels)
                 if isinstance(result, tuple):
                     batch_sequences, batch_saved_elements = result
-                    all_saved_elements.append(batch_saved_elements)
+                    
+                    # Process and move saved elements to CPU immediately
+                    batch_processed = self._process_saved_elements(
+                        batch_saved_elements, current_batch_size, sequence_length, steps
+                    )
+                    # Accumulate processed elements (already on CPU)
+                    for elem_name in save_elements_list:
+                        if elem_name in batch_processed:
+                            all_saved_elements_processed[elem_name].append(batch_processed[elem_name])
+                    
+                    # Clear GPU references
+                    del batch_saved_elements, batch_processed
                 else:
                     batch_sequences = result
 
-            # Keep on GPU for memory efficiency
-            all_sequences.append(batch_sequences)
-
-            # Periodic GPU cache clearing to avoid memory fragmentation
-            if i > 0 and i % 15 == 0:
+            # Move sequences to CPU immediately to free GPU memory
+            batch_sequences_cpu = batch_sequences.cpu()
+            all_sequences.append(batch_sequences_cpu)
+            
+            # Clear GPU references
+            del batch_sequences
+            if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
             print(f"Completed batch {i+1}/{num_batches} ({end_idx}/{num_samples} sequences)")
 
-        # Concatenate all batches on GPU, then move to CPU
+        # Concatenate all batches on CPU
         sampled_sequences = torch.cat(all_sequences, dim=0)
         
-        # Process and concatenate saved elements if present
-        if all_saved_elements:
-            # Combine saved elements from all batches
-            combined_saved_elements = {}
+        # Concatenate processed saved elements if present (already on CPU)
+        if all_saved_elements_processed and save_elements_list:
+            final_processed_elements = {}
             for elem_name in save_elements_list:
-                combined_saved_elements[elem_name] = []
-                for batch_elements in all_saved_elements:
-                    if elem_name in batch_elements:
-                        combined_saved_elements[elem_name].extend(batch_elements[elem_name])
-            
-            # Convert to proper format (N, L, T, 4)
-            processed_elements = self._process_saved_elements(combined_saved_elements, num_samples, sequence_length, steps)
-            return sampled_sequences, processed_elements
+                if elem_name in all_saved_elements_processed and all_saved_elements_processed[elem_name]:
+                    # Concatenate along batch dimension (dim 0)
+                    final_processed_elements[elem_name] = torch.cat(all_saved_elements_processed[elem_name], dim=0)
+            return sampled_sequences, final_processed_elements
 
         if save_elements_list:
             return sampled_sequences, {}
