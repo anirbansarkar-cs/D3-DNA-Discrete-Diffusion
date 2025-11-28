@@ -77,6 +77,8 @@ class Graph(abc.ABC):
     def reverse_rate(self, i, score):
         """
         Constructs the reverse rate. Which is score * transp_rate
+        transp_rate is the i-th row of the rate matrix Q for uniform graph
+        and the i-th column of the rate matrix Q for absorbing graph
         """
         normalized_rate = self.transp_rate(i) * score
 
@@ -157,6 +159,7 @@ class Uniform(Graph):
         return ((epow - 1) / (dim * epow)) * score.sum(dim=-1, keepdim=True) + score / epow
 
     def sample_limit(self, *batch_dims):
+        # TODO: maybe try forcing another initial state?
         return torch.randint(0, self.dim, batch_dims)
 
     def score_entropy(self, score, sigma, x, x0):

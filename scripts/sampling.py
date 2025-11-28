@@ -59,9 +59,10 @@ class Predictor(abc.ABC):
 @register_predictor(name="euler")
 class EulerPredictor(Predictor):
     def update_fn(self, score_fn, x, labels, t, step_size, save_elements=None):
-        sigma, dsigma = self.noise(t)
+        sigma, dsigma = self.noise(t)  #total_noise, rate_noise
         score = score_fn(x, sigma, labels)
 
+        # THESE ARE THE KEY ELEMENTS WE WANT TO COLLECT
         rev_rate = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score)
         x = self.graph.sample_rate(x, rev_rate)
         
@@ -104,6 +105,8 @@ class AnalyticPredictor(Predictor):
 
     
 class Denoiser:
+    # this is just like the AnalyticPredictor but adapting it
+    # to use the last (zero) timestep
     def __init__(self, graph, noise):
         self.graph = graph
         self.noise = noise
@@ -146,6 +149,7 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
     
 
 def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None):
+    # we have always use euler predictor, but there's also analytic
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
     denoiser = Denoiser(graph, noise)
@@ -153,6 +157,7 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
     @torch.no_grad()
     def pc_sampler(model, labels):
         sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+        # unless sample_limit() is implemented differently for another graph, this is always random
         x = graph.sample_limit(*batch_dims).to(device)
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
