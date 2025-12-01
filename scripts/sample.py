@@ -14,6 +14,7 @@ import argparse
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Union
 import numpy as np
+import h5py
 
 import torch
 import torch.nn.functional as F
@@ -542,8 +543,173 @@ class BaseSampler:
         results['output_path'] = output_path
         
         print(f"Representation saved to: {output_path}")
-        
+
         return results
+
+    def save_sampling_elements(self, saved_elements: Dict[str, torch.Tensor],
+                              output_path: Optional[str] = None, base_name: str = 'samples') -> str:
+        """
+        Save sampling elements (score, stag_score, prob, sequence) to HDF5 file.
+
+        This method consolidates the duplicated element-saving logic across dataset samplers.
+        Elements are saved with shape (N, L, T, 4) where:
+        - N = number of samples
+        - L = sequence length
+        - T = number of timesteps
+        - 4 = number of classes (A, C, G, T)
+
+        Args:
+            saved_elements: Dict mapping element names to tensors of shape (N, L, T, 4)
+            output_path: Optional output directory path (if None, uses current directory)
+            base_name: Base name for output file (default: 'samples')
+
+        Returns:
+            Path to saved HDF5 file
+        """
+        import h5py
+
+        # Determine output directory
+        if output_path:
+            output_dir = Path(output_path).parent if Path(output_path).suffix else Path(output_path)
+            if Path(output_path).suffix:
+                # If output_path is a file, use its stem as base_name
+                base_name = Path(output_path).stem
+        else:
+            output_dir = Path('.')
+
+        # Create output file path
+        output_file = output_dir / f"{base_name}_elements.h5"
+
+        print(f"\nSaving sampling elements to {output_file}...")
+        with h5py.File(output_file, 'w') as f:
+            for elem_name, elem_tensor in saved_elements.items():
+                # elem_tensor shape: (N, L, T, 4)
+                f.create_dataset(elem_name, data=elem_tensor.numpy(), compression='gzip')
+                print(f"  Saved dataset '{elem_name}': shape {elem_tensor.shape}")
+
+            # Save metadata as attributes
+            if saved_elements:
+                first_elem = list(saved_elements.values())[0]
+                f.attrs['num_samples'] = first_elem.shape[0]
+                f.attrs['sequence_length'] = first_elem.shape[1]
+                f.attrs['num_timesteps'] = first_elem.shape[2]
+                f.attrs['num_classes'] = first_elem.shape[3]
+                f.attrs['saved_elements'] = list(saved_elements.keys())
+                f.attrs['dataset'] = self.dataset_name
+
+        print(f"  All elements saved to: {output_file}")
+        return str(output_file)
+
+    def handle_sample_result(self, result: Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]],
+                            output_path: Optional[str] = None, format: str = 'npz',
+                            encoding: str = 'indices') -> Tuple[torch.Tensor, Optional[Dict[str, torch.Tensor]], Dict[str, Any]]:
+        """
+        Handle sampling result (sequences or tuple) and optionally save sequences.
+
+        This method consolidates the duplicated result-handling logic across dataset samplers.
+
+        Args:
+            result: Either sequences tensor or (sequences, saved_elements) tuple
+            output_path: Optional path to save sequences
+            format: Output format for sequences
+            encoding: Sequence encoding type
+
+        Returns:
+            Tuple of (sequences, saved_elements, results_dict)
+        """
+        # Unpack result
+        if isinstance(result, tuple):
+            sequences, saved_elements = result
+        else:
+            sequences = result
+            saved_elements = None
+
+        # Create results dictionary
+        results = {
+            'num_sequences': len(sequences),
+            'sequence_length': self.get_sequence_length(OmegaConf.create()) if hasattr(self, 'get_sequence_length') else sequences.shape[1]
+        }
+
+        # Save sequences if output path provided
+        if output_path:
+            self.save_sequences(sequences, output_path, format, encoding)
+            results['output_file'] = output_path
+            results['encoding'] = encoding
+
+        return sequences, saved_elements, results
+
+    @staticmethod
+    def load_config_with_fallback(config_path: Optional[str], dataset_dir: Path,
+                                 default_name: str = 'transformer.yaml') -> Tuple[OmegaConf, str]:
+        """
+        Load config with standard fallback logic.
+
+        This method consolidates the duplicated config-loading logic across dataset samplers.
+
+        Args:
+            config_path: Optional path to config file
+            dataset_dir: Path to dataset directory (e.g., model_zoo/promoter)
+            default_name: Default config filename to use if config_path not provided
+
+        Returns:
+            Tuple of (config, config_path_used)
+        """
+        if not config_path:
+            # Try to use default config from dataset directory
+            try:
+                config_path = dataset_dir / 'configs' / default_name
+                if config_path.exists():
+                    print(f"Using default config: {config_path}")
+                else:
+                    raise FileNotFoundError(
+                        f"No config provided and default config not found: {config_path}\n"
+                        f"Please provide a config file with --config"
+                    )
+            except Exception as e:
+                raise RuntimeError(f"Error loading default config: {e}")
+
+        config = OmegaConf.load(config_path)
+        return config, str(config_path)
+
+    def load_and_generate_labels(self, config: OmegaConf, num_samples: int,
+                                use_test_set: bool, data_path: Optional[str],
+                                dataset_class, specific_labels: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, int]:
+        """
+        Load labels from test set or generate random labels.
+
+        This method consolidates the duplicated test-set label loading logic across dataset samplers.
+
+        Args:
+            config: Configuration object
+            num_samples: Number of samples to generate labels for
+            use_test_set: Whether to use test set labels
+            data_path: Path to data file (required if use_test_set is True)
+            dataset_class: Dataset class to use for loading test data
+            specific_labels: Optional pre-computed labels to use
+
+        Returns:
+            Tuple of (labels, actual_num_samples)
+        """
+        if specific_labels is not None:
+            # Use user-provided labels
+            return specific_labels.to(self.device), num_samples
+
+        if use_test_set:
+            # Load test set labels
+            if not data_path:
+                raise ValueError("--data_path is required when using --use_test_set")
+
+            # Load test dataset to get labels
+            test_dataset = dataset_class(data_path, split='test')
+            labels = test_dataset.y.to(self.device)
+            num_samples = len(test_dataset)
+            print(f"Using test set labels: {num_samples} samples with shape {labels.shape}")
+            return labels, num_samples
+        else:
+            # Generate random labels
+            labels = self.generate_conditioning_labels(num_samples, config)
+            print(f"Using random labels with shape {labels.shape}")
+            return labels, num_samples
 
 
 def parse_base_args():

@@ -99,23 +99,11 @@ def main():
                        help='List of elements to save during sampling: sequence, score, stag_score, prob. '
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     args = parser.parse_args()
-    
-    # Load config if not provided
-    if not args.config:
-        try:
-            config_path = Path(__file__).parent / 'configs' / 'transformer.yaml'  # Default to transformer
-            if config_path.exists():
-                args.config = str(config_path)
-                print(f"Using default config: {args.config}")
-            else:
-                print(f"Error: No config provided and default config not found: {config_path}")
-                print("Please provide a config file with --config")
-                return 1
-        except Exception as e:
-            print(f"Error loading default config: {e}")
-            return 1
-    
-    config = OmegaConf.load(args.config)
+
+    # Load config using shared utility
+    config, _ = BaseSampler.load_config_with_fallback(
+        args.config, Path(__file__).parent, 'transformer.yaml'
+    )
     sampler = DeepSTARRSampler()
 
     if args.save_rep:
@@ -176,58 +164,17 @@ def main():
         save_elements_list=args.save_elements
     )
 
-    # Handle returned result (may be just sequences or (sequences, saved_elements))
-    if isinstance(result, tuple):
-        sequences, saved_elements = result
-    else:
-        sequences = result
-        saved_elements = None
+    # Handle result using shared utility
+    sequences, saved_elements, results = sampler.handle_sample_result(
+        result, args.output, args.format, args.sequence_encoding
+    )
 
-    # Save sequences if output path provided
-    if args.output:
-        sampler.save_sequences(sequences, args.output, args.format, args.sequence_encoding)
-        results = {
-            'num_sequences': len(sequences),
-            'sequence_length': sampler.get_sequence_length(config),
-            'output_file': args.output,
-            'encoding': args.sequence_encoding
-        }
-    else:
-        results = {
-            'num_sequences': len(sequences),
-            'sequence_length': sampler.get_sequence_length(config)
-        }
-
-    # Save elements if requested
+    # Save elements if requested using shared utility
     if saved_elements:
-        # Determine output directory (use same directory as sequence output if provided)
-        if args.output:
-            output_dir = Path(args.output).parent
-            base_name = Path(args.output).stem
-        else:
-            output_dir = Path('.')
-            base_name = 'deepstarr_samples'
-
-        # Save all elements as datasets in a single HDF5 file
-        output_file = output_dir / f"{base_name}_elements.h5"
-
-        print(f"\nSaving sampling elements to {output_file}...")
-        with h5py.File(output_file, 'w') as f:
-            for elem_name, elem_tensor in saved_elements.items():
-                # elem_tensor shape: (N, L, T, 4)
-                f.create_dataset(elem_name, data=elem_tensor.numpy(), compression='gzip')
-                print(f"  Saved dataset '{elem_name}': shape {elem_tensor.shape}")
-
-            # Save metadata as attributes
-            first_elem = list(saved_elements.values())[0]
-            f.attrs['num_samples'] = first_elem.shape[0]
-            f.attrs['sequence_length'] = first_elem.shape[1]
-            f.attrs['num_timesteps'] = first_elem.shape[2]
-            f.attrs['num_classes'] = first_elem.shape[3]
-            f.attrs['saved_elements'] = list(saved_elements.keys())
-
-        print(f"  All elements saved to: {output_file}")
-        results['saved_elements_file'] = str(output_file)
+        elements_file = sampler.save_sampling_elements(
+            saved_elements, args.output, 'deepstarr_samples'
+        )
+        results['saved_elements_file'] = elements_file
         results['saved_elements'] = list(saved_elements.keys())
 
     # Print results
