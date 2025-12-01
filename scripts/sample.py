@@ -537,22 +537,7 @@ class BaseSampler:
             # Extract directory from checkpoint path for output
             checkpoint_dir = os.path.dirname(checkpoint_path)
             output_path = os.path.join(checkpoint_dir, f"rep_{save_rep_timestamp}_{split}.{format}")
-        # if format == "h5" or format == "hdf5":
-        #     import h5py
-        #     with h5py.File(output_path, "w") as f:
-        #         # Convert float8 to float16 for HDF5 compatibility
-        #         if all_representations.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
-        #             print("Converting float8 to float16 for HDF5 compatibility")
-        #             representations_data = all_representations.to(torch.float16).numpy()
-        #         else:
-        #             representations_data = all_representations.numpy()
-        #         f.create_dataset("representations", data=representations_data)
-        #     print(f"Representations saved as HDF5 to: {output_path}")
-        # elif format == "pt":
-        #     # PyTorch native format - supports float8 natively (if available)
-        #     torch.save(all_representations, output_path)
-        #     print(f"Representations saved as PyTorch tensor (dtype: {all_representations.dtype}) to: {output_path}")
-        # else:
+
         self.save_sequences(all_representations, output_path, format)
         results['output_path'] = output_path
         
