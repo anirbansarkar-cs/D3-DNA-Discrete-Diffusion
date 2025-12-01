@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-ATAC-seq Sampling Script
-
-Inherits from base sampling framework while using ATAC-seq-specific models directly.
-Uses proper PC sampling methodology.
+ATAC-seq Sampling Script. Inherits from base sampling framework while using ATAC-seq-specific models directly.
 """
 
 import os
@@ -31,36 +28,28 @@ class ATACseqSampler(BaseSampler):
         super().__init__("ATACseq")
 
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
-        """Load ATAC-seq model using dataset-specific model loading."""
         from model_zoo.atacseq.models import load_trained_model
 
         return load_trained_model(checkpoint_path, config, architecture, self.device)
 
     def get_sequence_length(self, config: OmegaConf) -> int:
-        """Get ATAC-seq sequence length."""
         if hasattr(config, 'model') and hasattr(config.model, 'length'):
             return config.model.length
-        return 249  # ATAC-seq fixed sequence length (same as DeepSTARR)
+        return 249  # ATAC-seq fixed sequence length
 
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for ATAC-seq sampling.
-
-        ATAC-seq has multiple cell type activities (signal_dim from config).
-        """
         # Get signal_dim from config (number of cell types)
         if hasattr(config, 'dataset') and hasattr(config.dataset, 'signal_dim'):
             signal_dim = config.dataset.signal_dim
         else:
-            signal_dim = 18  # Default for ATAC-seq (18 cell types)
+            signal_dim = 18  # Default for ATAC-seq
 
-        # Generate random activities for each cell type
         labels = torch.randn(num_samples, signal_dim, device=self.device) * 2.0
         return labels
 
 
 def main():
-    """Main sampling function using base framework."""
-    # Parse arguments using base framework
+
     parser = parse_base_args()
     # Add ATAC-seq-specific conditioning arguments
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
@@ -70,26 +59,20 @@ def main():
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     args = parser.parse_args()
 
-    # Load config using shared utility
     config, _ = BaseSampler.load_config_with_fallback(
         args.config, Path(__file__).parent, 'transformer.yaml'
     )
     sampler = ATACseqSampler()
 
-    # Generate conditioning labels
     conditioning_labels = None
     if not args.unconditional:
-        # Random activities (default behavior for ATAC-seq)
         conditioning_labels = sampler.generate_conditioning_labels(args.num_samples, config)
         print(f"Using random cell type activities with shape {conditioning_labels.shape}")
     else:
         print("Sampling unconditionally (no conditioning labels)")
 
-    # Set default steps to sequence length if not provided
     steps = args.steps if args.steps is not None else sampler.get_sequence_length(config)
-    print(f"Using {steps} sampling steps")
 
-    # Sample using PC sampler with optional element saving
     print(f"Loading ATAC-seq {args.architecture} model from {args.checkpoint}")
     result = sampler.sample_sequences_with_pc_sampler(
         checkpoint_path=args.checkpoint,
@@ -101,12 +84,10 @@ def main():
         save_elements_list=args.save_elements
     )
 
-    # Handle result using shared utility
     sequences, saved_elements, results = sampler.handle_sample_result(
         result, args.output, args.format, args.sequence_encoding
     )
 
-    # Save elements if requested using shared utility
     if saved_elements:
         elements_file = sampler.save_sampling_elements(
             saved_elements, args.output, 'atacseq_samples'
@@ -114,7 +95,6 @@ def main():
         results['saved_elements_file'] = elements_file
         results['saved_elements'] = list(saved_elements.keys())
 
-    # Print results
     print(f"\nATAC-seq Sampling Results:")
     print("=" * 40)
     for key, value in results.items():

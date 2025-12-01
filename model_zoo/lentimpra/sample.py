@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """
-LentIMPRA Sampling Script
-
-Inherits from base sampling framework while using LentIMPRA-specific models directly.
-Uses proper PC sampling methodology.
+LentIMPRA Sampling Script. Inherits from base sampling framework while using LentIMPRA-specific models directly.
 """
 
 import os
 import sys
 import argparse
 from pathlib import Path
-
 import torch
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
@@ -34,20 +30,14 @@ class LentIMPRASampler(BaseSampler):
         super().__init__("LentIMPRA")
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
-        """Load LentIMPRA model using dataset-specific model loading."""
         from model_zoo.lentimpra.models import load_trained_model
         
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
     def get_sequence_length(self, config: OmegaConf) -> int:
-        """Get LentIMPRA sequence length."""
         return 230  # LentIMPRA fixed sequence length
     
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for LentIMPRA sampling.
-
-        Supports both single-class (N, 1) and multi-class (N, 3) based on config.
-        """
         # Check signal dimension from config (1 for single-class, 3 for multi-class)
         signal_dim = config.dataset.get('signal_dim', 1)
 
@@ -57,7 +47,6 @@ class LentIMPRASampler(BaseSampler):
 
 
 def load_default_config():
-    """Load LentIMPRA default configuration (transformer)."""
     config_file = Path(__file__).parent / 'configs' / 'transformer.yaml'
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
@@ -65,8 +54,7 @@ def load_default_config():
 
 
 def main():
-    """Main sampling function using base framework."""
-    # Parse arguments using base framework
+
     parser = parse_base_args()
     # Add LentIMPRA-specific conditioning arguments
     parser.add_argument('--activity', type=float, help='Regulatory activity value for single-class models (if not provided, uses random)')
@@ -138,13 +126,10 @@ def main():
     else:
         print("Sampling unconditionally (no conditioning labels)")
     
-    # Set default steps to sequence length if not provided
     steps = args.steps
     if steps is None:
         steps = sampler.get_sequence_length(config)
-        print(f"Using default steps: {steps} (sequence length)")
 
-    # Auto-detect architecture for multi-class models
     architecture = args.architecture
     if signal_dim > 1 and architecture == 'transformer':
         architecture = 'transformer_multi_class'
@@ -176,12 +161,10 @@ def main():
         results['saved_elements'] = list(saved_elements.keys())
 
     # Print results
-    print(f"\nLentIMPRA Sampling Results:")
+    print(f"\nLentiMPRA sampling complete. Results:")
     print("=" * 40)
     for key, value in results.items():
         print(f"{key}: {value}")
-
-    print(f"\n✓ LentIMPRA sampling completed successfully!")
     return 0
 
 

@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-DeepSTARR Sampling Script
-
-Inherits from base sampling framework while using DeepSTARR-specific models directly.
-Uses proper PC sampling methodology.
+DeepSTARR Sampling Script. Inherits from base sampling framework while using DeepSTARR-specific models directly.
 """
 
 import os
@@ -35,40 +32,32 @@ class DeepSTARRSampler(BaseSampler):
         super().__init__("DeepSTARR")
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
-        """Load DeepSTARR model using dataset-specific model loading."""
         from model_zoo.deepstarr.models import load_trained_model
-        
+
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
     def get_sequence_length(self, config: OmegaConf) -> int:
-        """Get DeepSTARR sequence length."""
         return 249  # DeepSTARR fixed sequence length
     
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for DeepSTARR sampling."""
         # DeepSTARR has 2 activities: Dev and HK enhancer activities
-        # Generate random activities in a reasonable range
         labels = torch.randn(num_samples, 2, device=self.device)
         return labels
     def create_dataloader(self, config: OmegaConf, split: str = 'test', batch_size: Optional[int] = None):
-        """Create DeepSTARR dataloader."""
-        # Load datasets
         train_ds, val_ds, test_ds = get_deepstarr_datasets(config.paths.data_file)
-        
-        # Select appropriate dataset
+
         if split == 'train':
             dataset = train_ds
-        elif split == 'val':  # Use val as test for now
+        elif split == 'val':
             dataset = val_ds
         elif split == 'test':
             dataset = test_ds
         else:
             raise ValueError(f"Unknown split: {split}")
-            
-        # Use config batch size if not specified
+
         if batch_size is None:
             batch_size = getattr(config, 'batch_size', 32)
-            
+
         return DataLoader(
             dataset,
             batch_size=batch_size,
@@ -79,7 +68,6 @@ class DeepSTARRSampler(BaseSampler):
 
 
 def load_default_config():
-    """Load DeepSTARR default configuration (transformer)."""
     config_file = Path(__file__).parent / 'configs' / 'transformer.yaml'
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
@@ -87,8 +75,7 @@ def load_default_config():
 
 
 def main():
-    """Main sampling function using base framework."""
-    # Parse arguments using base framework
+
     parser = parse_base_args()
     # Add DeepSTARR-specific conditioning arguments
     parser.add_argument('--dev_activity', type=float, help='Dev enhancer activity value (if not provided, uses random)')
@@ -100,17 +87,12 @@ def main():
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     args = parser.parse_args()
 
-    # Load config using shared utility
     config, _ = BaseSampler.load_config_with_fallback(
         args.config, Path(__file__).parent, 'transformer.yaml'
     )
     sampler = DeepSTARRSampler()
 
     if args.save_rep:
-        # if not args.data_path:
-        #     print("Error: --data_path is required for saving representation")
-        #     return 1
-        # else:
         print(f"Saving representation of the model to {args.data_path}")
         results = sampler.save_representation(
             checkpoint_path=args.checkpoint,
@@ -123,36 +105,29 @@ def main():
             format=args.format
         )
 
-        # Print results
         print(f"\n{sampler.dataset_name} Representation Results:")
         print("=" * 40)
         for key, value in results.items():
             print(f"{key}: {value}")
-        
+
         print(f"\n✓ {sampler.dataset_name} saving representation completed successfully!")
         sys.exit(0)
-    
-    # Generate conditioning labels based on arguments
+
     conditioning_labels = None
     if not args.unconditional:
         if args.dev_activity is not None and args.hk_activity is not None:
-            # User-specified activities
             conditioning_labels = torch.tensor([[args.dev_activity, args.hk_activity]], device=sampler.device).expand(args.num_samples, -1)
             print(f"Using specified activities: Dev={args.dev_activity}, HK={args.hk_activity}")
         else:
-            # Random activities (default behavior)
             conditioning_labels = sampler.generate_conditioning_labels(args.num_samples, config)
             print("Using random activities")
     else:
         print("Sampling unconditionally (no conditioning labels)")
-    
-    # Set default steps to sequence length if not provided
+
     steps = args.steps
     if steps is None:
         steps = sampler.get_sequence_length(config)
-        print(f"Using default steps: {steps} (sequence length)")
 
-    # Run sampling using PC sampler
     print(f"Loading DeepSTARR {args.architecture} model from {args.checkpoint}")
     result = sampler.sample_sequences_with_pc_sampler(
         checkpoint_path=args.checkpoint,
@@ -164,12 +139,10 @@ def main():
         save_elements_list=args.save_elements
     )
 
-    # Handle result using shared utility
     sequences, saved_elements, results = sampler.handle_sample_result(
         result, args.output, args.format, args.sequence_encoding
     )
 
-    # Save elements if requested using shared utility
     if saved_elements:
         elements_file = sampler.save_sampling_elements(
             saved_elements, args.output, 'deepstarr_samples'
@@ -177,7 +150,6 @@ def main():
         results['saved_elements_file'] = elements_file
         results['saved_elements'] = list(saved_elements.keys())
 
-    # Print results
     print(f"\nDeepSTARR Sampling Results:")
     print("=" * 40)
     for key, value in results.items():

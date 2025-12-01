@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-MPRA Sampling Script
-
-Inherits from base sampling framework while using MPRA-specific models directly.
-Uses proper PC sampling methodology.
+MPRA Sampling Script. Inherits from base sampling framework while using MPRA-specific models directly.
 """
 
 import os
@@ -32,27 +29,22 @@ class MPRASampler(BaseSampler):
         super().__init__("MPRA")
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
-        """Load MPRA model using dataset-specific model loading."""
         from model_zoo.mpra.models import load_trained_model
-        
+
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
     def get_sequence_length(self, config: OmegaConf) -> int:
-        """Get MPRA sequence length."""
         if hasattr(config, 'model') and hasattr(config.model, 'length'):
             return config.model.length
         return 200  # MPRA default sequence length
     
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for MPRA sampling."""
         # MPRA typically has 3 labels for different regulatory activities
-        # Generate random activities in a reasonable range
-        labels = torch.randn(num_samples, 3, device=self.device) * 1.5  # Adjust scale as needed
+        labels = torch.randn(num_samples, 3, device=self.device) * 1.5
         return labels
 
 
 def load_config(architecture: str):
-    """Load MPRA configuration."""
     config_file = Path(__file__).parent / 'configs' / f'{architecture}.yaml'
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
@@ -60,8 +52,7 @@ def load_config(architecture: str):
 
 
 def main():
-    """Main sampling function using base framework."""
-    # Parse arguments using base framework
+
     parser = parse_base_args()
     # Add MPRA-specific conditioning arguments
     parser.add_argument('--activity1', type=float, help='Activity 1 value (if not provided, uses random)')
@@ -74,38 +65,30 @@ def main():
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     args = parser.parse_args()
 
-    # Load config using shared utility
     config, _ = BaseSampler.load_config_with_fallback(
         args.config, Path(__file__).parent, 'transformer.yaml'
     )
     sampler = MPRASampler()
 
-    # Generate conditioning labels based on arguments
     conditioning_labels = None
     if not args.unconditional:
         if args.activity1 is not None and args.activity2 is not None and args.activity3 is not None:
-            # All three activities must be specified together
             conditioning_labels = torch.tensor(
                 [[args.activity1, args.activity2, args.activity3]],
                 device=sampler.device
             ).expand(args.num_samples, -1)
             print(f"Using specified activities: Activity1={args.activity1}, Activity2={args.activity2}, Activity3={args.activity3}")
         elif any([args.activity1, args.activity2, args.activity3]):
-            # Partial specification is an error
             print("Error: For MPRA, either specify all three activities or none")
             return 1
         else:
-            # Random activities (default behavior)
             conditioning_labels = sampler.generate_conditioning_labels(args.num_samples, config)
             print("Using random activities")
     else:
         print("Sampling unconditionally (no conditioning labels)")
 
-    # Set default steps to sequence length if not provided
     steps = args.steps if args.steps is not None else sampler.get_sequence_length(config)
-    print(f"Using {steps} sampling steps")
 
-    # Sample using PC sampler with optional element saving
     print(f"Loading MPRA {args.architecture} model from {args.checkpoint}")
     result = sampler.sample_sequences_with_pc_sampler(
         checkpoint_path=args.checkpoint,
@@ -117,12 +100,10 @@ def main():
         save_elements_list=args.save_elements
     )
 
-    # Handle result using shared utility
     sequences, saved_elements, results = sampler.handle_sample_result(
         result, args.output, args.format, args.sequence_encoding
     )
 
-    # Save elements if requested using shared utility
     if saved_elements:
         elements_file = sampler.save_sampling_elements(
             saved_elements, args.output, 'mpra_samples'
@@ -130,7 +111,6 @@ def main():
         results['saved_elements_file'] = elements_file
         results['saved_elements'] = list(saved_elements.keys())
 
-    # Print results
     print(f"\nMPRA Sampling Results:")
     print("=" * 40)
     for key, value in results.items():
