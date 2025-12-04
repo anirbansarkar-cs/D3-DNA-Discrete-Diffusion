@@ -119,7 +119,8 @@ class BaseSampler:
                                        num_samples: int, steps: int, architecture: str = 'transformer',
                                        conditioning_labels: Optional[torch.Tensor] = None,
                                        sampling_batch_size: Optional[int] = None,
-                                       save_elements_list: Optional[list] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+                                       save_elements_list: Optional[list] = None,
+                                       initial_x: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Sample sequences using the proper PC sampler with optional batching.
 
@@ -131,6 +132,7 @@ class BaseSampler:
             architecture: Architecture type
             conditioning_labels: Optional conditioning labels (if None, generates random)
             sampling_batch_size: Batch size for sampling (None = smart default: 256 for >512 samples)
+            initial_x: Optional initial condition sequences (if None, uses graph.sample_limit())
 
         Returns:
             Sampled sequences tensor
@@ -153,8 +155,8 @@ class BaseSampler:
         # If batch size equals num_samples, do single-batch sampling (original behavior)
         if sampling_batch_size >= num_samples:
             sampling_fn = sampling.get_pc_sampler(
-                graph, noise, (num_samples, sequence_length), 'analytic', steps, 
-                device=self.device, save_elements_list=save_elements_list
+                graph, noise, (num_samples, sequence_length), 'analytic', steps,
+                device=self.device, save_elements_list=save_elements_list, initial_x=initial_x
             )
             result = sampling_fn(model, conditioning_labels.to(self.device))
             if isinstance(result, tuple):
@@ -199,10 +201,16 @@ class BaseSampler:
             if conditioning_labels is not None:
                 batch_labels = conditioning_labels[start_idx:end_idx]
 
+            # Get initial condition for this batch
+            batch_initial_x = None
+            if initial_x is not None:
+                batch_initial_x = initial_x[start_idx:end_idx]
+
             # Create sampling function for this batch
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (current_batch_size, sequence_length),
-                'analytic', steps, device=self.device, save_elements_list=save_elements_list
+                'analytic', steps, device=self.device, save_elements_list=save_elements_list,
+                initial_x=batch_initial_x
             )
 
             # Generate sequences for this batch

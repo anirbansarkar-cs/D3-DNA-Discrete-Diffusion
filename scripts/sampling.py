@@ -81,6 +81,7 @@ class NonePredictor(Predictor):
 
 @register_predictor(name="analytic")
 class AnalyticPredictor(Predictor):
+    # this is the Tweedie Denoiser in the SEDD paper
     def update_fn(self, score_fn, x, labels, t, step_size, save_elements=None):
         curr_sigma = self.noise(t)[0]
         next_sigma = self.noise(t - step_size)[0]
@@ -148,7 +149,7 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
     return sampling_fn
     
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None):
     # we have always use euler predictor, but there's also analytic
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
@@ -157,8 +158,12 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
     @torch.no_grad()
     def pc_sampler(model, labels):
         sampling_score_fn = get_score_fn(model, train=False, sampling=True)
-        # unless sample_limit() is implemented differently for another graph, this is always random
-        x = graph.sample_limit(*batch_dims).to(device)
+        # Use provided initial condition if available, otherwise sample from limit distribution
+        if initial_x is not None:
+            x = initial_x.to(device)
+        else:
+            # unless sample_limit() is implemented differently for another graph, this is always random
+            x = graph.sample_limit(*batch_dims).to(device)
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
 

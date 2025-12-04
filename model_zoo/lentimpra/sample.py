@@ -67,6 +67,11 @@ def main():
                        choices=['sequence', 'score', 'stag_score', 'prob'],
                        help='List of elements to save during sampling: sequence, score, stag_score, prob. '
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
+    parser.add_argument('--initial_condition', type=str, default='random',
+                       choices=['random', 'test', 'dinuc'],
+                       help='Initial condition for sampling: random (default), test (use onehot_test sequences), '
+                            'or dinuc (use pre-computed onehot_test_dinuc sequences from H5 file). '
+                            'Requires --data_path when using test or dinuc.')
     args = parser.parse_args()
 
     # Load config using shared utility
@@ -78,9 +83,36 @@ def main():
     # Determine signal dimension from config (1 for single-class, 3 for multi-class)
     signal_dim = config.dataset.get('signal_dim', 1)
 
-    # Generate conditioning labels based on arguments
-    conditioning_labels = None
+    # Handle initial condition loading first to determine num_samples
+    initial_x = None
     num_samples = args.num_samples
+
+    if args.initial_condition != 'random':
+        if not args.data_path:
+            print("Error: --data_path is required when using --initial_condition test or dinuc")
+            return 1
+
+        print(f"Loading initial conditions from test set ({args.initial_condition} mode)...")
+
+        # Load one-hot sequences directly from H5 file
+        with h5py.File(args.data_path, 'r') as data:
+            if args.initial_condition == 'dinuc':
+                onehot_test = np.array(data['onehot_test_dinuc'])  # (N, 230, 4)
+                print(f"Loaded dinucleotide-shuffled test sequences")
+            else:  # args.initial_condition == 'test'
+                onehot_test = np.array(data['onehot_test'])  # (N, 230, 4)
+                print(f"Loaded test sequences")
+
+        num_samples = len(onehot_test)
+        print(f"Loaded {num_samples} sequences with shape {onehot_test.shape}")
+
+        # Convert one-hot to indices: (N, 230, 4) -> (N, 4, 230) -> (N, 230)
+        onehot_test = np.transpose(onehot_test, (0, 2, 1))  # (N, 230, 4) -> (N, 4, 230)
+        initial_x = torch.tensor(np.argmax(onehot_test, axis=1))  # (N, 4, 230) -> (N, 230)
+        print(f"Initial conditions prepared: {initial_x.shape}")
+
+    # Generate conditioning labels based on arguments (now with correct num_samples)
+    conditioning_labels = None
 
     if not args.unconditional:
         if args.use_test_set:
@@ -144,7 +176,8 @@ def main():
         steps=steps,
         architecture=architecture,
         conditioning_labels=conditioning_labels,
-        save_elements_list=args.save_elements
+        save_elements_list=args.save_elements,
+        initial_x=initial_x
     )
 
     # Handle result using shared utility
