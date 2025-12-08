@@ -74,6 +74,7 @@ def main():
                             'or custom_sequences (provide a path to a H5 file with sequences). '
                             'Requires --data_path when using test or dinuc or custom_sequences.')
     parser.add_argument('--custom_inits_path', type=str, help='Path to a H5 file with sequences for custom initial conditions')
+    parser.add_argument('--custom_inits_step', type=int, default=10, help='Step to use for custom initial conditions')
     args = parser.parse_args()
 
     # Load config using shared utility
@@ -108,7 +109,7 @@ def main():
 
             # TODO: remove or generalize
             if args.initial_condition == 'custom':  # then the shape is (samples, 230, steps, 4), do step 10,25,40
-                onehot = onehot[:, :, 10, :]
+                onehot = onehot[:, :, args.custom_inits_step, :]
         
         num_samples = len(onehot)
         # TODO: refine shape checking for standard expected input
