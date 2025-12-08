@@ -64,14 +64,16 @@ def main():
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
     parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
     parser.add_argument('--save_elements', type=str, nargs='+', default=None,
-                       choices=['sequence', 'score', 'stag_score', 'prob'],
+                       choices=['sequence', 'score'],
                        help='List of elements to save during sampling: sequence, score, stag_score, prob. '
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     parser.add_argument('--initial_condition', type=str, default='random',
-                       choices=['random', 'test', 'dinuc'],
+                       choices=['random', 'test', 'dinuc', 'custom_path'],
                        help='Initial condition for sampling: random (default), test (use onehot_test sequences), '
-                            'or dinuc (use pre-computed onehot_test_dinuc sequences from H5 file). '
-                            'Requires --data_path when using test or dinuc.')
+                            'or dinuc (use pre-computed onehot_test_dinuc sequences from H5 file), '
+                            'or custom_sequences (provide a path to a H5 file with sequences). '
+                            'Requires --data_path when using test or dinuc or custom_sequences.')
+    parser.add_argument('--custom_inits_path', type=str, help='Path to a H5 file with sequences for custom initial conditions')
     args = parser.parse_args()
 
     # Load config using shared utility
@@ -83,80 +85,64 @@ def main():
     # Determine signal dimension from config (1 for single-class, 3 for multi-class)
     signal_dim = config.dataset.get('signal_dim', 1)
 
-    # Handle initial condition loading first to determine num_samples
     initial_x = None
     num_samples = args.num_samples
 
     if args.initial_condition != 'random':
-        if not args.data_path:
-            print("Error: --data_path is required when using --initial_condition test or dinuc")
-            return 1
+        # TODO: either delete this custom loader later or make it more general
+        if args.initial_condition == 'custom_path':
+            if not args.custom_inits_path:
+                print("Error: --custom_inits_path is required when using --initial_condition custom_path")
+                return 1
+            h5_path = args.custom_inits_path
+            dataset_key = 'sequence'
+        else:
+            if not args.data_path:
+                print(f"Error: --data_path is required when using --initial_condition {args.initial_condition}")
+                return 1
+            h5_path = args.data_path
+            dataset_key = 'onehot_test_dinuc' if args.initial_condition == 'dinuc' else 'onehot_test'
 
-        print(f"Loading initial conditions from test set ({args.initial_condition} mode)...")
+        with h5py.File(h5_path, 'r') as data:
+            onehot = np.array(data[dataset_key])
 
-        # Load one-hot sequences directly from H5 file
-        with h5py.File(args.data_path, 'r') as data:
-            if args.initial_condition == 'dinuc':
-                onehot_test = np.array(data['onehot_test_dinuc'])  # (N, 230, 4)
-                print(f"Loaded dinucleotide-shuffled test sequences")
-            else:  # args.initial_condition == 'test'
-                onehot_test = np.array(data['onehot_test'])  # (N, 230, 4)
-                print(f"Loaded test sequences")
+            # TODO: remove or generalize
+            if args.initial_condition == 'custom':  # then the shape is (samples, 230, steps, 4), do step 10,25,40
+                onehot = onehot[:, :, 10, :]
+        
+        num_samples = len(onehot)
+        # TODO: refine shape checking for standard expected input
+        if onehot.shape[1] != 4:
+            onehot = np.transpose(onehot, (0, 2, 1))
+        initial_x = torch.tensor(np.argmax(onehot, axis=1))
+        print(f"Loaded {num_samples} initial sequences: {initial_x.shape}")
 
-        num_samples = len(onehot_test)
-        print(f"Loaded {num_samples} sequences with shape {onehot_test.shape}")
-
-        # Convert one-hot to indices: (N, 230, 4) -> (N, 4, 230) -> (N, 230)
-        onehot_test = np.transpose(onehot_test, (0, 2, 1))  # (N, 230, 4) -> (N, 4, 230)
-        initial_x = torch.tensor(np.argmax(onehot_test, axis=1))  # (N, 4, 230) -> (N, 230)
-        print(f"Initial conditions prepared: {initial_x.shape}")
-
-    # Generate conditioning labels based on arguments (now with correct num_samples)
     conditioning_labels = None
-
     if not args.unconditional:
         if args.use_test_set:
-            # Use test set labels from dataset
             if not args.data_path:
                 print("Error: --data_path is required when using --use_test_set")
                 return 1
-
-            # Load test dataset to get labels
             from model_zoo.lentimpra.data import LentIMPRADataset
             test_dataset = LentIMPRADataset(args.data_path, split='test')
             conditioning_labels = test_dataset.y.to(sampler.device)
             num_samples = len(test_dataset)
-            print(f"Using test set labels: {num_samples} samples with shape {conditioning_labels.shape}")
 
         elif signal_dim == 1 and args.activity is not None:
-            # Single-class: user-specified activity
             conditioning_labels = torch.tensor([[args.activity]], device=sampler.device).expand(num_samples, -1)
-            print(f"Using specified activity: {args.activity}")
 
         elif signal_dim == 3:
-            # Multi-class: check if all three activities are specified
-            multi_class_activities = [args.k562_activity, args.hepg2_activity, args.wtc11_activity]
-            if all(a is not None for a in multi_class_activities):
-                # All three activities specified
-                conditioning_labels = torch.tensor(
-                    [[args.k562_activity, args.hepg2_activity, args.wtc11_activity]],
-                    device=sampler.device
-                ).expand(num_samples, -1)
-                print(f"Using specified activities - K562: {args.k562_activity}, HepG2: {args.hepg2_activity}, WTC11: {args.wtc11_activity}")
-            elif any(a is not None for a in multi_class_activities):
-                # Some but not all activities specified - this is an error
-                print("Error: For multi-class models, either specify all three activities (--k562_activity, --hepg2_activity, --wtc11_activity) or none")
+            activities = [args.k562_activity, args.hepg2_activity, args.wtc11_activity]
+            if all(a is not None for a in activities):
+                conditioning_labels = torch.tensor([activities], device=sampler.device).expand(num_samples, -1)
+            elif any(a is not None for a in activities):
+                print("Error: For multi-class models, specify all three activities or none")
                 return 1
             else:
-                # No activities specified, use random
                 conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
-                print(f"Using random activities (multi-class, {signal_dim} dimensions)")
+
         else:
-            # Random activity (default behavior)
             conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
-            print(f"Using random activities ({signal_dim} dimension{'s' if signal_dim > 1 else ''})")
-    else:
-        print("Sampling unconditionally (no conditioning labels)")
     
     steps = args.steps
     if steps is None:
