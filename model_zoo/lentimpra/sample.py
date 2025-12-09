@@ -111,7 +111,7 @@ def main():
 
             # TODO: remove or generalize
             if args.initial_condition == 'custom':  # then the shape is (samples, 230, steps, 4), do step 10,25,40
-                onehot = onehot[:, :, args.custom_inits_step, :].squeeze(2)
+                onehot = onehot[:, :, args.custom_inits_step, :]
         
         num_samples = len(onehot)
         # TODO: refine shape checking for standard expected input
