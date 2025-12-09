@@ -77,6 +77,8 @@ def main():
     parser.add_argument('--custom_inits_step', type=int, default=10, help='Step to use for custom initial conditions')
     args = parser.parse_args()
 
+    # TODO: unify save_elements with the save_rep and other functions in the BaseSampler class
+
     # Load config using shared utility
     config, _ = BaseSampler.load_config_with_fallback(
         args.config, Path(__file__).parent, 'transformer.yaml'
@@ -109,7 +111,7 @@ def main():
 
             # TODO: remove or generalize
             if args.initial_condition == 'custom':  # then the shape is (samples, 230, steps, 4), do step 10,25,40
-                onehot = onehot[:, :, args.custom_inits_step, :]
+                onehot = onehot[:, :, args.custom_inits_step, :].squeeze(2)
         
         num_samples = len(onehot)
         # TODO: refine shape checking for standard expected input
