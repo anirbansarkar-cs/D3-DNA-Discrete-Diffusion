@@ -68,7 +68,7 @@ def main():
                        help='List of elements to save during sampling: sequence, score, stag_score, prob. '
                             'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     parser.add_argument('--initial_condition', type=str, default='random',
-                       choices=['random', 'test', 'dinuc', 'custom_path'],
+                       choices=['random', 'test', 'dinuc', 'custom'],
                        help='Initial condition for sampling: random (default), test (use onehot_test sequences), '
                             'or dinuc (use pre-computed onehot_test_dinuc sequences from H5 file), '
                             'or custom_sequences (provide a path to a H5 file with sequences). '
@@ -93,9 +93,9 @@ def main():
 
     if args.initial_condition != 'random':
         # TODO: either delete this custom loader later or make it more general
-        if args.initial_condition == 'custom_path':
+        if args.initial_condition == 'custom':
             if not args.custom_inits_path:
-                print("Error: --custom_inits_path is required when using --initial_condition custom_path")
+                print("Error: --custom_inits_path is required when using --initial_condition custom")
                 return 1
             h5_path = args.custom_inits_path
             dataset_key = 'sequence'
