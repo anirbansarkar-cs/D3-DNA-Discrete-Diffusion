@@ -156,7 +156,8 @@ def main():
         architecture=architecture,
         conditioning_labels=conditioning_labels,
         save_elements_list=args.save_elements,
-        initial_x=initial_x
+        initial_x=initial_x,
+        start_at_timestep=args.start_at_timestep
     )
 
     # Handle result using shared utility

@@ -120,7 +120,8 @@ class BaseSampler:
                                        conditioning_labels: Optional[torch.Tensor] = None,
                                        sampling_batch_size: Optional[int] = None,
                                        save_elements_list: Optional[list] = None,
-                                       initial_x: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+                                       initial_x: Optional[torch.Tensor] = None,
+                                       start_at_timestep: int = 0) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Sample sequences using the proper PC sampler with optional batching.
 
@@ -133,6 +134,7 @@ class BaseSampler:
             conditioning_labels: Optional conditioning labels (if None, generates random)
             sampling_batch_size: Batch size for sampling (None = smart default: 256 for >512 samples)
             initial_x: Optional initial condition sequences (if None, uses graph.sample_limit())
+            start_at_timestep: Start sampling at this timestep (delayed sampling, default 0)
 
         Returns:
             Sampled sequences tensor
@@ -156,7 +158,8 @@ class BaseSampler:
         if sampling_batch_size >= num_samples:
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (num_samples, sequence_length), 'analytic', steps,
-                device=self.device, save_elements_list=save_elements_list, initial_x=initial_x
+                device=self.device, save_elements_list=save_elements_list, initial_x=initial_x,
+                start_at_timestep=start_at_timestep
             )
             result = sampling_fn(model, conditioning_labels.to(self.device))
             if isinstance(result, tuple):
@@ -210,7 +213,7 @@ class BaseSampler:
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (current_batch_size, sequence_length),
                 'analytic', steps, device=self.device, save_elements_list=save_elements_list,
-                initial_x=batch_initial_x
+                initial_x=batch_initial_x, start_at_timestep=start_at_timestep
             )
 
             # Generate sequences for this batch
@@ -780,6 +783,8 @@ def parse_base_args():
                             'dinuc (use pre-computed onehot_test_dinuc sequences from H5 file), '
                             'or custom (provide custom sequences via model-specific arguments). '
                             'Requires --data_path when using test or dinuc.')
+    parser.add_argument('--start_at_timestep', type=int, default=0,
+                       help='Start sampling at this timestep (delayed sampling). Default is 0 (start from beginning).')
 
     return parser
 

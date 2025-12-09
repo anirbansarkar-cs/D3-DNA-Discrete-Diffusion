@@ -132,7 +132,8 @@ def main():
         steps=steps,
         architecture=args.architecture,
         conditioning_labels=conditioning_labels,
-        save_elements_list=args.save_elements
+        save_elements_list=args.save_elements,
+        start_at_timestep=args.start_at_timestep
     )
 
     sequences, saved_elements, results = sampler.handle_sample_result(
