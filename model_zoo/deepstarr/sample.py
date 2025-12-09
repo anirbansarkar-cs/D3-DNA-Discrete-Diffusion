@@ -81,10 +81,6 @@ def main():
     parser.add_argument('--dev_activity', type=float, help='Dev enhancer activity value (if not provided, uses random)')
     parser.add_argument('--hk_activity', type=float, help='HK enhancer activity value (if not provided, uses random)')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
-    parser.add_argument('--save_elements', type=str, nargs='+', default=None,
-                       choices=['sequence', 'score', 'stag_score', 'prob'],
-                       help='List of elements to save during sampling: sequence, score, stag_score, prob. '
-                            'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
     args = parser.parse_args()
 
     config, _ = BaseSampler.load_config_with_fallback(
@@ -143,12 +139,7 @@ def main():
         result, args.output, args.format, args.sequence_encoding
     )
 
-    if saved_elements:
-        elements_file = sampler.save_sampling_elements(
-            saved_elements, args.output, 'deepstarr_samples'
-        )
-        results['saved_elements_file'] = elements_file
-        results['saved_elements'] = list(saved_elements.keys())
+    results.update(sampler.handle_saved_elements(saved_elements, args.output, 'deepstarr_samples'))
 
     print(f"\nDeepSTARR Sampling Results:")
     print("=" * 40)

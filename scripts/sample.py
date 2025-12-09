@@ -541,15 +541,20 @@ class BaseSampler:
             'architecture': architecture
         }
 
-        # Save representation
+        # Generate output path if not provided
         if output_path is None:
-            # Extract directory from checkpoint path for output
             checkpoint_dir = os.path.dirname(checkpoint_path)
             output_path = os.path.join(checkpoint_dir, f"rep_{save_rep_timestamp}_{split}.{format}")
 
-        self.save_sequences(all_representations, output_path, format)
-        results['output_path'] = output_path
-        
+        # Use handle_sample_result to save with consistent logic
+        _, _, save_results = self.handle_sample_result(
+            all_representations,
+            output_path=output_path,
+            format=format,
+            encoding='index'
+        )
+        results.update(save_results)
+
         print(f"Representation saved to: {output_path}")
 
         return results
@@ -646,6 +651,31 @@ class BaseSampler:
 
         return sequences, saved_elements, results
 
+    def handle_saved_elements(self, saved_elements: Optional[Dict[str, torch.Tensor]],
+                             output_path: Optional[str], base_name: str) -> Dict[str, Any]:
+        """
+        Handle saved elements by saving them to HDF5 and returning metadata.
+
+        This method consolidates the duplicated saved_elements handling logic
+        across all dataset samplers.
+
+        Args:
+            saved_elements: Optional dict of saved elements (or None if no elements)
+            output_path: Optional output path for sequences
+            base_name: Base name for the output file (e.g., 'deepstarr_samples')
+
+        Returns:
+            Dictionary with saved_elements_file and saved_elements keys (empty if no elements)
+        """
+        results = {}
+
+        if saved_elements:
+            elements_file = self.save_sampling_elements(saved_elements, output_path, base_name)
+            results['saved_elements_file'] = elements_file
+            results['saved_elements'] = list(saved_elements.keys())
+
+        return results
+
     @staticmethod
     def load_config_with_fallback(config_path: Optional[str], dataset_dir: Path,
                                  default_name: str = 'transformer.yaml') -> Tuple[OmegaConf, str]:
@@ -737,6 +767,19 @@ def parse_base_args():
     parser.add_argument('--format', choices=['npz', 'fasta', 'csv', 'h5', 'hdf5', 'pt'], default='h5', help='Output format')
     parser.add_argument('--sequence_encoding', choices=['index', 'onehot'], default='index',
                        help='Sequence encoding: "index" for integer indices (0-3 for A,C,G,T) or "onehot" for one-hot encoding')
+    parser.add_argument('--save_elements', type=str, nargs='+', default=None,
+                       choices=['sequence', 'score', 'activity_label'],
+                       help='List of elements to save during sampling: sequence, score, activity_label. '
+                            'sequence and score are saved as (N, L, T, 4) tensors. '
+                            'activity_label saves the conditioning labels used for generation.')
+    parser.add_argument('--use_test_set', action='store_true', default=False,
+                       help='Use test set labels from dataset as conditioning labels')
+    parser.add_argument('--initial_condition', type=str, default='random',
+                       choices=['random', 'test', 'dinuc', 'custom'],
+                       help='Initial condition for sampling: random (default), test (use onehot_test sequences), '
+                            'dinuc (use pre-computed onehot_test_dinuc sequences from H5 file), '
+                            'or custom (provide custom sequences via model-specific arguments). '
+                            'Requires --data_path when using test or dinuc.')
 
     return parser
 

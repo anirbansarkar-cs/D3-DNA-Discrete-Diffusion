@@ -62,17 +62,7 @@ def main():
     parser.add_argument('--hepg2_activity', type=float, help='HepG2 activity value for multi-class models')
     parser.add_argument('--wtc11_activity', type=float, help='WTC11 activity value for multi-class models')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
-    parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
-    parser.add_argument('--save_elements', type=str, nargs='+', default=None,
-                       choices=['sequence', 'score'],
-                       help='List of elements to save during sampling: sequence, score, stag_score, prob. '
-                            'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
-    parser.add_argument('--initial_condition', type=str, default='random',
-                       choices=['random', 'test', 'dinuc', 'custom'],
-                       help='Initial condition for sampling: random (default), test (use onehot_test sequences), '
-                            'or dinuc (use pre-computed onehot_test_dinuc sequences from H5 file), '
-                            'or custom_sequences (provide a path to a H5 file with sequences). '
-                            'Requires --data_path when using test or dinuc or custom_sequences.')
+    # LentIMPRA-specific custom initialization arguments
     parser.add_argument('--custom_inits_path', type=str, help='Path to a H5 file with sequences for custom initial conditions')
     parser.add_argument('--custom_inits_step', type=int, default=10, help='Step to use for custom initial conditions')
     args = parser.parse_args()
@@ -175,12 +165,7 @@ def main():
     )
 
     # Save elements if requested using shared utility
-    if saved_elements:
-        elements_file = sampler.save_sampling_elements(
-            saved_elements, args.output, 'lentimpra_samples'
-        )
-        results['saved_elements_file'] = elements_file
-        results['saved_elements'] = list(saved_elements.keys())
+    results.update(sampler.handle_saved_elements(saved_elements, args.output, 'lentimpra_samples'))
 
     # Print results
     print(f"\nLentiMPRA sampling complete. Results:")
