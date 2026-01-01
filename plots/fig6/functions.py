@@ -225,351 +225,13 @@ def motif_margin_per_sample(backward: h5py.File, max_n: int = 256,
 # Plotting Functions
 # ============================================================================
 
-def plot_total_flips(flips: np.ndarray, seq_len: int, ax: Optional[plt.Axes] = None,
-                      q_lo: float = 0.1, q_hi: float = 0.9, color: str = 'tab:red',
-                      t1: Optional[int] = None, t2: Optional[int] = None,
-                      plot_individual: bool = True, n_traces: int = 50, 
-                      trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot total number of actual nucleotide state transitions over time
-    
-    Args:
-        flips: (S, N) array of flip counts per step per sample
-        seq_len: Sequence length L
-        ax: Matplotlib axes (creates new if None)
-        q_lo, q_hi: Quantiles for bands
-        color: Plot color
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    # mut_rate_per = load_mutation_rate(flips, seq_len)
-    low, med, high = compute_bands(flips, q_lo, q_hi)
-    
-    xs = np.arange(flips.shape[0])
-    _plot_bands_and_traces(ax, xs, flips, low, med, high, color, 
-                           'Mutation rate', q_lo, q_hi, plot_individual, 
-                           n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('Mutation rate')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
-def plot_stag_score(logits: np.ndarray, ax: Optional[plt.Axes] = None,
-                        q_lo: float = 0.1, q_hi: float = 0.9, color: str = 'tab:blue',
-                        log_scale: bool = True, t1: Optional[int] = None, 
-                        t2: Optional[int] = None, plot_individual: bool = True,
-                        n_traces: int = 50, trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot stag_score over timesteps.
-    
-    Args:
-        logits: (S, N, L, 4) array of logits, or (S, N) pre-computed L2 values
-        ax: Matplotlib axes (creates new if None)
-        q_lo, q_hi: Quantiles for bands
-        color: Plot color
-        log_scale: Apply log10(1+.) transformation
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    if logits.ndim == 4:
-        # Compute L2 from logits
-        S, N, L, _ = logits.shape
-        meanpos_per = np.zeros((S, N), dtype=np.float32)
-        for t in range(S):
-            for i in range(N):
-                perpos = np.linalg.norm(logits[t, i], axis=-1)  # (L,)
-                meanpos_per[t, i] = perpos.mean()
-    else:
-        meanpos_per = logits
-    
-    if log_scale:
-        meanpos_per = np.log10(1.0 + np.clip(meanpos_per, 0, None))
-    
-    low, med, high = compute_bands(meanpos_per, q_lo, q_hi)
-    xs = np.arange(meanpos_per.shape[0])
-    
-    _plot_bands_and_traces(ax, xs, meanpos_per, low, med, high, color,
-                           'Score (log10(1+mean L2))', q_lo, q_hi, plot_individual,
-                           n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('Score (log10(1+mean L2))')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
-def plot_predicted_activities(y_pred: np.ndarray, ax: Optional[plt.Axes] = None,
-                              q_lo: float = 0.1, q_hi: float = 0.9, 
-                              color: str = 'tab:green', t1: Optional[int] = None,
-                              t2: Optional[int] = None, plot_individual: bool = True,
-                              n_traces: int = 50, trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot predicted activities over timesteps separated by activity range 
-    (high, near zero, median (if different from near zero), low).
-    
-    Args:
-        y_pred: (S, N) array of predicted activities
-        ax: Matplotlib axes (creates new if None)
-        q_lo, q_hi: Quantiles for bands
-        color: Plot color
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    low, med, high = compute_bands(y_pred, q_lo, q_hi)
-    xs = np.arange(y_pred.shape[0])
-
-    # get the stats of the predicted activities
-    
-    _plot_bands_and_traces(ax, xs, y_pred, low, med, high, color,
-                           'predicted activities', q_lo, q_hi, plot_individual,
-                           n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('predicted activities')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
-def plot_attribution_magnitude(attr_per: np.ndarray, ax: Optional[plt.Axes] = None,
-                              q_lo: float = 0.1, q_hi: float = 0.9, 
-                              color: str = 'tab:purple', t1: Optional[int] = None,
-                              t2: Optional[int] = None, plot_individual: bool = True,
-                              n_traces: int = 50, trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot attribution magnitude over timesteps.
-    
-    Args:
-        attr_per: (S, N) array of mean attribution magnitudes per sample
-        ax: Matplotlib axes (creates new if None)
-        q_lo, q_hi: Quantiles for bands
-        color: Plot color
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    low, med, high = compute_bands(attr_per, q_lo, q_hi)
-    xs = np.arange(attr_per.shape[0])
-    
-    _plot_bands_and_traces(ax, xs, attr_per, low, med, high, color,
-                           'Mean |attribution|', q_lo, q_hi, plot_individual,
-                           n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('Mean |attribution|')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
-def plot_motif_proxy(motif_per: np.ndarray, ax: Optional[plt.Axes] = None,
-                    q_lo: float = 0.1, q_hi: float = 0.9, color: str = 'tab:orange',
-                    t1: Optional[int] = None, t2: Optional[int] = None,
-                    plot_individual: bool = True, n_traces: int = 50,
-                    trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot motif proxy (top1 - top2 probability margin) over timesteps.
-    
-    Args:
-        motif_per: (S, N) array of motif proxy values per sample
-        ax: Matplotlib axes (creates new if None)
-        q_lo, q_hi: Quantiles for bands
-        color: Plot color
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    low, med, high = compute_bands(motif_per, q_lo, q_hi)
-    xs = np.arange(motif_per.shape[0])
-    
-    _plot_bands_and_traces(ax, xs, motif_per, low, med, high, color,
-                           'motif proxy', q_lo, q_hi, plot_individual,
-                           n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('motif proxy')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
-def plot_motif_scores(motif_scores: np.ndarray, motif_names: list, 
-                     ax: Optional[plt.Axes] = None, motif_indices: Optional[list] = None,
-                     q_lo: float = 0.1, q_hi: float = 0.9, 
-                     agg_method: str = 'median', t1: Optional[int] = None,
-                     t2: Optional[int] = None, plot_individual: bool = True,
-                     n_traces: int = 50, trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot real motif scores (log-odds) over timesteps.
-    
-    Args:
-        motif_scores: (S, N, M) array of motif scores
-        motif_names: List of M motif names
-        ax: Matplotlib axes (creates new if None)
-        motif_indices: Which motifs to plot (default: all)
-        q_lo, q_hi: Quantiles for bands
-        agg_method: 'median' or 'mean' for center line
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    S, N, M = motif_scores.shape
-    if motif_indices is None:
-        motif_indices = list(range(M))
-    
-    xs = np.arange(S)
-    colors = mpl.rcParams['axes.prop_cycle'].by_key()['color']
-    
-    for j, midx in enumerate(motif_indices):
-        per = motif_scores[:, :, midx]  # (S, N)
-        if agg_method == 'mean':
-            center = np.nanmean(per, axis=1)
-        else:
-            center = np.nanmedian(per, axis=1)
-        lo = np.nanquantile(per, q_lo, axis=1)
-        hi = np.nanquantile(per, q_hi, axis=1)
-        name = f"motif {motif_names[midx]}"
-        color = colors[(j+2) % len(colors)]
-        
-        _plot_bands_and_traces(ax, xs, per, lo, center, hi, color, name,
-                              q_lo, q_hi, plot_individual, n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('motif scores')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
-def plot_qrev(qrev_per: np.ndarray, ax: Optional[plt.Axes] = None,
-              q_lo: float = 0.1, q_hi: float = 0.9, color: str = 'tab:brown',
-              t1: Optional[int] = None, t2: Optional[int] = None,
-              plot_individual: bool = True, n_traces: int = 50,
-              trace_alpha: float = 0.12) -> plt.Axes:
-    """Plot Q_rev (reverse move probability) over timesteps.
-    
-    Args:
-        qrev_per: (S, N) array of Q_rev values per sample
-        ax: Matplotlib axes (creates new if None)
-        q_lo, q_hi: Quantiles for bands
-        color: Plot color
-        t1, t2: Stage boundaries (optional)
-        plot_individual: Whether to overlay individual traces
-        n_traces: Number of traces to overlay
-        trace_alpha: Alpha for individual traces
-    
-    Returns:
-        Matplotlib axes object
-    """
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(11, 3))
-    
-    low, med, high = compute_bands(qrev_per, q_lo, q_hi)
-    xs = np.arange(qrev_per.shape[0])
-    
-    _plot_bands_and_traces(ax, xs, qrev_per, low, med, high, color,
-                           'Q_rev move_mass', q_lo, q_hi, plot_individual,
-                           n_traces, trace_alpha)
-    
-    if t1 is not None and t2 is not None:
-        draw_stage_lines(ax, t1, t2)
-        annotate_stage_labels(ax, t1, t2, len(xs))
-    
-    ax.set_ylabel('Q_rev move_mass')
-    ax.set_xlabel('timestep')
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.6)
-    ax.grid(False)
-    
-    return ax
-
-
 def plot_staggered_score(stag_per: np.ndarray, ax: Optional[plt.Axes] = None,
-                        q_lo: float = 0.1, q_hi: float = 0.9, 
+                        q_lo: float = 0.1, q_hi: float = 0.9,
                         color: str = '#2ca02c', t1: Optional[int] = None,
                         t2: Optional[int] = None, plot_individual: bool = True,
                         n_traces: int = 50, trace_alpha: float = 0.12) -> plt.Axes:
     """Plot staggered score over timesteps.
-    
+
     Args:
         stag_per: (S, N) array of staggered score values per sample
         ax: Matplotlib axes (creates new if None)
@@ -579,28 +241,284 @@ def plot_staggered_score(stag_per: np.ndarray, ax: Optional[plt.Axes] = None,
         plot_individual: Whether to overlay individual traces
         n_traces: Number of traces to overlay
         trace_alpha: Alpha for individual traces
-    
+
     Returns:
         Matplotlib axes object
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(11, 3))
-    
+
     low, med, high = compute_bands(stag_per, q_lo, q_hi)
     xs = np.arange(stag_per.shape[0])
-    
+
     _plot_bands_and_traces(ax, xs, stag_per, low, med, high, color,
                            'stagger score', q_lo, q_hi, plot_individual,
                            n_traces, trace_alpha)
-    
+
     if t1 is not None and t2 is not None:
         draw_stage_lines(ax, t1, t2)
         annotate_stage_labels(ax, t1, t2, len(xs))
-    
+
     ax.set_ylabel('stagger score')
     ax.set_xlabel('timestep')
     for spine in ax.spines.values():
         spine.set_linewidth(1.6)
     ax.grid(False)
-    
+
+    return ax
+
+
+def plot_dsigma(dsigma: np.ndarray, ax: Optional[plt.Axes] = None,
+                q_lo: float = 0.1, q_hi: float = 0.9, color: str = 'tab:cyan',
+                t1: Optional[int] = None, t2: Optional[int] = None,
+                plot_individual: bool = False, n_traces: int = 50,
+                trace_alpha: float = 0.12) -> plt.Axes:
+    """Plot dsigma (step size) over timesteps.
+
+    Args:
+        dsigma: (S,) or (S, N) array of step sizes
+        ax: Matplotlib axes (creates new if None)
+        q_lo, q_hi: Quantiles for bands (only used if dsigma is (S, N))
+        color: Plot color
+        t1, t2: Stage boundaries (optional)
+        plot_individual: Whether to overlay individual traces
+        n_traces: Number of traces to overlay
+        trace_alpha: Alpha for individual traces
+
+    Returns:
+        Matplotlib axes object
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(11, 3))
+
+    xs = np.arange(dsigma.shape[0])
+
+    if dsigma.ndim == 1:
+        # Single trace
+        ax.plot(xs, dsigma, color=color, linewidth=2.2, label='dsigma')
+    else:
+        # Multiple samples
+        low, med, high = compute_bands(dsigma, q_lo, q_hi)
+        _plot_bands_and_traces(ax, xs, dsigma, low, med, high, color,
+                               'dsigma', q_lo, q_hi, plot_individual,
+                               n_traces, trace_alpha)
+
+    if t1 is not None and t2 is not None:
+        draw_stage_lines(ax, t1, t2)
+        annotate_stage_labels(ax, t1, t2, len(xs))
+
+    ax.set_ylabel('dsigma (step size)')
+    ax.set_xlabel('timestep')
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.6)
+    ax.grid(False)
+
+    return ax
+
+
+def plot_staggered_score_by_activity(stag_scores: np.ndarray, activities: np.ndarray,
+                                     ax: Optional[plt.Axes] = None,
+                                     t1: Optional[int] = None, t2: Optional[int] = None,
+                                     log_scale: bool = True,
+                                     percentile_groups: list = None) -> plt.Axes:
+    """Plot log staggered scores grouped by activity percentiles.
+
+    Args:
+        stag_scores: (S, N) array of staggered score values per sample
+        activities: (S, N) array of predicted activities per sample
+        ax: Matplotlib axes (creates new if None)
+        t1, t2: Stage boundaries (optional)
+        log_scale: Apply log10(1+.) transformation to scores
+        percentile_groups: List of tuples [(plo1, phi1, label1), ...] for grouping
+                          Default: [(0, 33, 'low'), (33, 67, 'med'), (67, 100, 'high')]
+
+    Returns:
+        Matplotlib axes object
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(11, 3))
+
+    if percentile_groups is None:
+        percentile_groups = [(0, 33, 'low'), (33, 67, 'med'), (67, 100, 'high')]
+
+    S, N = stag_scores.shape
+    xs = np.arange(S)
+    colors = ['#E24A33', '#988ED5', '#348ABD']  # low, med, high
+
+    # Apply log transform if requested
+    scores_to_plot = stag_scores.copy()
+    if log_scale:
+        scores_to_plot = np.log10(1.0 + np.clip(scores_to_plot, 0, None))
+
+    for i, (plo, phi, label) in enumerate(percentile_groups):
+        # For each timestep, group samples by their activity percentile
+        group_means = np.zeros(S)
+
+        for t in range(S):
+            # Get activity percentiles at this timestep
+            act_t = activities[t, :]
+            p_lo = np.percentile(act_t, plo)
+            p_hi = np.percentile(act_t, phi)
+
+            # Select samples in this percentile range
+            mask = (act_t >= p_lo) & (act_t <= p_hi)
+            if np.any(mask):
+                group_means[t] = np.nanmean(scores_to_plot[t, mask])
+            else:
+                group_means[t] = np.nan
+
+        color = colors[i % len(colors)]
+        ax.plot(xs, group_means, color=color, linewidth=2.2,
+                label=f'{label} activity ({plo}-{phi}%)')
+
+    if t1 is not None and t2 is not None:
+        draw_stage_lines(ax, t1, t2)
+        annotate_stage_labels(ax, t1, t2, len(xs))
+
+    ylabel = 'log10(1+stagger score)' if log_scale else 'stagger score'
+    ax.set_ylabel(f'{ylabel} by activity')
+    ax.set_xlabel('timestep')
+    ax.legend(frameon=False, fontsize=9)
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.6)
+    ax.grid(False)
+
+    return ax
+
+
+def plot_qrev_stay_vs_move(qrev: np.ndarray, ax: Optional[plt.Axes] = None,
+                          q_lo: float = 0.1, q_hi: float = 0.9,
+                          t1: Optional[int] = None, t2: Optional[int] = None,
+                          plot_individual: bool = False, n_traces: int = 50,
+                          trace_alpha: float = 0.12) -> plt.Axes:
+    """Plot Q_rev stay vs move probabilities over timesteps.
+
+    Computes the average probability of staying in the same state (diagonal)
+    vs moving to a different state (off-diagonal) from the reverse transition matrix.
+
+    Args:
+        qrev: (S, N, K, K) array of reverse transition matrices, or
+              (S, N, 2) array with pre-computed [stay_prob, move_prob] per sample
+        ax: Matplotlib axes (creates new if None)
+        q_lo, q_hi: Quantiles for bands
+        t1, t2: Stage boundaries (optional)
+        plot_individual: Whether to overlay individual traces
+        n_traces: Number of traces to overlay
+        trace_alpha: Alpha for individual traces
+
+    Returns:
+        Matplotlib axes object
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(11, 3))
+
+    if qrev.ndim == 4:
+        # Compute stay vs move from full matrix
+        S, N, K, _ = qrev.shape
+        stay_probs = np.zeros((S, N))
+        move_probs = np.zeros((S, N))
+
+        for t in range(S):
+            for n in range(N):
+                # Diagonal elements are stay probabilities
+                diag = np.diag(qrev[t, n])
+                stay_probs[t, n] = np.mean(diag)
+
+                # Off-diagonal elements are move probabilities
+                off_diag = qrev[t, n].copy()
+                np.fill_diagonal(off_diag, 0)
+                move_probs[t, n] = np.mean(off_diag[off_diag != 0]) if np.any(off_diag != 0) else 0
+    elif qrev.ndim == 3 and qrev.shape[2] == 2:
+        # Pre-computed stay/move probabilities
+        stay_probs = qrev[:, :, 0]
+        move_probs = qrev[:, :, 1]
+    else:
+        raise ValueError(f"qrev must be (S, N, K, K) or (S, N, 2), got {qrev.shape}")
+
+    xs = np.arange(stay_probs.shape[0])
+
+    # Plot stay probabilities
+    low_stay, med_stay, high_stay = compute_bands(stay_probs, q_lo, q_hi)
+    _plot_bands_and_traces(ax, xs, stay_probs, low_stay, med_stay, high_stay,
+                           '#348ABD', 'stay', q_lo, q_hi, plot_individual,
+                           n_traces, trace_alpha)
+
+    # Plot move probabilities
+    low_move, med_move, high_move = compute_bands(move_probs, q_lo, q_hi)
+    _plot_bands_and_traces(ax, xs, move_probs, low_move, med_move, high_move,
+                           '#E24A33', 'move', q_lo, q_hi, plot_individual,
+                           n_traces, trace_alpha)
+
+    if t1 is not None and t2 is not None:
+        draw_stage_lines(ax, t1, t2)
+        annotate_stage_labels(ax, t1, t2, len(xs))
+
+    ax.set_ylabel('Q_rev probability')
+    ax.set_xlabel('timestep')
+    ax.legend(frameon=False, fontsize=9)
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.6)
+    ax.grid(False)
+
+    return ax
+
+
+def plot_mutation_rate_avg(mutation_rates: np.ndarray, ax: Optional[plt.Axes] = None,
+                           q_lo: float = 0.1, q_hi: float = 0.9,
+                           color: str = 'tab:olive', t1: Optional[int] = None,
+                           t2: Optional[int] = None, plot_individual: bool = True,
+                           n_traces: int = 50, trace_alpha: float = 0.12) -> plt.Axes:
+    """Plot average mutation rate from the mutation matrix over time.
+
+    For uniform graph, the theoretical rate is constant, but empirical rates may vary.
+
+    Args:
+        mutation_rates: (S, N) array of mutation rates per sample, or
+                       (S, N, K, K) array of full rate matrices
+        ax: Matplotlib axes (creates new if None)
+        q_lo, q_hi: Quantiles for bands
+        color: Plot color
+        t1, t2: Stage boundaries (optional)
+        plot_individual: Whether to overlay individual traces
+        n_traces: Number of traces to overlay
+        trace_alpha: Alpha for individual traces
+
+    Returns:
+        Matplotlib axes object
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(11, 3))
+
+    if mutation_rates.ndim == 4:
+        # Compute average off-diagonal rate from full matrix
+        S, N, K, _ = mutation_rates.shape
+        avg_rates = np.zeros((S, N))
+
+        for t in range(S):
+            for n in range(N):
+                # Off-diagonal elements are mutation rates
+                rate_matrix = mutation_rates[t, n]
+                off_diag = rate_matrix.copy()
+                np.fill_diagonal(off_diag, 0)
+                avg_rates[t, n] = np.mean(np.abs(off_diag[off_diag != 0])) if np.any(off_diag != 0) else 0
+    else:
+        avg_rates = mutation_rates
+
+    low, med, high = compute_bands(avg_rates, q_lo, q_hi)
+    xs = np.arange(avg_rates.shape[0])
+
+    _plot_bands_and_traces(ax, xs, avg_rates, low, med, high, color,
+                           'mutation rate', q_lo, q_hi, plot_individual,
+                           n_traces, trace_alpha)
+
+    if t1 is not None and t2 is not None:
+        draw_stage_lines(ax, t1, t2)
+        annotate_stage_labels(ax, t1, t2, len(xs))
+
+    ax.set_ylabel('avg mutation rate')
+    ax.set_xlabel('timestep')
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.6)
+    ax.grid(False)
+
     return ax
