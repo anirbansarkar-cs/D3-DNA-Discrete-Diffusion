@@ -1,4 +1,5 @@
-import streamlit as st
+import panel as pn
+import param
 import sqlite3
 import pandas as pd
 from pathlib import Path
@@ -14,6 +15,9 @@ from index_experiments import insert_file
 
 # Constants
 DB_PATH = str(Path(__file__).parent / "experiments.db")
+
+# Initialize Panel extension
+pn.extension('tabulator')
 
 # ============================================================================
 # Database Query Functions
@@ -122,14 +126,6 @@ def get_file_metadata(file_id: int) -> Optional[dict]:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Debug: Check if ID exists
-        cur.execute("SELECT COUNT(*) FROM files WHERE id = ?", (file_id,))
-        count = cur.fetchone()[0]
-
-        if count == 0:
-            st.warning(f"Debug: No file found with id={file_id}")
-            return None
-
         cur.execute("""
             SELECT id, path, file_type, size, mtime, owner
             FROM files
@@ -142,7 +138,6 @@ def get_file_metadata(file_id: int) -> Optional[dict]:
             return dict(result)
         return None
     except Exception as e:
-        st.error(f"Database error: {e}")
         return None
 
 
@@ -251,319 +246,354 @@ def format_timestamp(timestamp: float) -> str:
 
 
 # ============================================================================
-# UI Render Functions
+# Panel Application
 # ============================================================================
 
-def init_session_state():
-    """Initialize session state variables."""
-    if 'selected_file_ids' not in st.session_state:
-        st.session_state.selected_file_ids = []
-    if 'show_move_panel' not in st.session_state:
-        st.session_state.show_move_panel = False
+class ExperimentBrowser(param.Parameterized):
+    """Main Panel application for browsing experiment files."""
 
+    # Reactive parameters
+    selected_file_ids = param.List(default=[])
+    show_move_panel = param.Boolean(default=False)
 
-def render_top_bar():
-    """Render the top bar with title and DB info."""
-    st.title("Experiment Browser")
+    # Filter parameters
+    file_type_filter = param.ObjectSelector(default="All", objects=["All"])
+    owner_filter = param.ObjectSelector(default="All", objects=["All"])
+    date_filter = param.Date(default=datetime.now() - timedelta(days=365))
+    search_filter = param.String(default="")
 
-    last_indexed = get_last_indexed_time()
-    db_path = Path(DB_PATH).absolute()
+    def __init__(self, **params):
+        super().__init__(**params)
 
-    # Check if database exists
-    db_exists = db_path.exists()
+        # Initialize filter options
+        self._update_filter_options()
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        if db_exists:
-            st.caption(f"**Database:** `{db_path}` ✓")
-        else:
-            st.error(f"**Database not found:** `{db_path}` ✗")
-    with col2:
-        if last_indexed:
-            st.caption(f"**Last indexed:** {last_indexed.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            st.caption("**Last indexed:** No data")
-
-
-def render_filters():
-    """Render filter controls and return filter values."""
-    st.subheader("Filters")
-
-    # File type filter
-    file_types = ["All"] + get_unique_file_types()
-    selected_type = st.selectbox("File Type", file_types, key="file_type_filter")
-
-    # Owner filter
-    owners = ["All"] + get_unique_owners()
-    selected_owner = st.selectbox("Owner", owners, key="owner_filter")
-
-    # Modified after date filter
-    min_date = datetime.now() - timedelta(days=365)
-    max_date = datetime.now()
-    selected_date = st.date_input(
-        "Modified After",
-        value=min_date.date(),
-        min_value=min_date.date(),
-        max_value=max_date.date(),
-        key="date_filter"
-    )
-    modified_after = datetime.combine(selected_date, datetime.min.time())
-
-    # Text search
-    search_text = st.text_input(
-        "Search Path",
-        placeholder="Enter text to filter by path...",
-        key="search_filter"
-    )
-
-    return {
-        'file_type': selected_type if selected_type != "All" else None,
-        'owner': selected_owner if selected_owner != "All" else None,
-        'modified_after': modified_after,
-        'search_text': search_text if search_text else None
-    }
-
-
-def render_file_list(df: pd.DataFrame):
-    """Render scrollable file list with selection."""
-    st.subheader(f"Files ({len(df)})")
-
-    if df.empty:
-        st.info("No files match the current filters.")
-        return
-
-    # Prepare display dataframe
-    display_df = df[['filename', 'owner', 'size', 'modified']].copy()
-    display_df['size'] = display_df['size'].apply(format_file_size)
-    display_df['modified'] = display_df['modified'].dt.strftime('%Y-%m-%d %H:%M')
-
-    # Configure multiselect
-    event = st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="multi-row",
-        height=600
-    )
-
-    # Handle multiple selections
-    if event.selection.rows:
-        selected_indices = event.selection.rows
-        selected_file_ids = [int(df.iloc[idx]['id']) for idx in selected_indices]
-        st.session_state.selected_file_ids = selected_file_ids
-        st.caption(f"Selected {len(selected_file_ids)} file(s)")
-    else:
-        st.session_state.selected_file_ids = []
-
-
-def render_selected_files_panel(selected_ids: List[int]):
-    """Show selected files with datasets and optional move operations."""
-    if not selected_ids:
-        st.info("Select files to view details")
-        return
-
-    st.subheader(f"Selected Files ({len(selected_ids)})")
-
-    # Show datasets for each selected file
-    for file_id in selected_ids:
-        metadata = get_file_metadata(file_id)
-        if metadata:
-            filename = Path(metadata['path']).name
-
-            # Use expander for each file
-            with st.expander(f"📁 {filename}", expanded=(len(selected_ids) == 1)):
-                # File metadata
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.caption("**Path:**")
-                    st.code(metadata['path'], language=None)
-                    st.caption("**Type:**")
-                    st.text(metadata['file_type'])
-
-                with col2:
-                    st.caption("**Size:**")
-                    st.text(format_file_size(metadata['size']))
-                    st.caption("**Owner:**")
-                    st.text(metadata['owner'] or "Unknown")
-
-                # Datasets table
-                st.caption("**Datasets:**")
-                datasets_df = get_file_datasets(file_id)
-                if not datasets_df.empty:
-                    st.dataframe(
-                        datasets_df,
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.info("No datasets found")
-
-    st.divider()
-
-    # Move button to toggle move panel
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.button("📦 Move" if not st.session_state.show_move_panel else "❌ Cancel",
-                     use_container_width=True):
-            st.session_state.show_move_panel = not st.session_state.show_move_panel
-            st.rerun()
-
-    # Show move panel if toggled
-    if st.session_state.show_move_panel:
-        st.subheader("Move Files")
-
-        # Get existing directories
-        existing_dirs = get_existing_directories()
-
-        # Dropdown for existing directories
-        use_existing = st.checkbox("Choose from existing directories", value=True)
-
-        destination = None
-        if use_existing and existing_dirs:
-            destination = st.selectbox(
-                "Select directory",
-                options=existing_dirs,
-                key="dest_dir_select"
-            )
-
-        # Text input for custom path
-        st.markdown("**Or enter custom path:**")
-        custom_path = st.text_input(
-            "Destination directory",
-            placeholder="/path/to/destination",
-            key="dest_dir_input"
+        # Create widgets
+        self.file_type_widget = pn.widgets.Select.from_param(
+            self.param.file_type_filter, name="File Type"
+        )
+        self.owner_widget = pn.widgets.Select.from_param(
+            self.param.owner_filter, name="Owner"
+        )
+        self.date_widget = pn.widgets.DatePicker.from_param(
+            self.param.date_filter, name="Modified After"
+        )
+        self.search_widget = pn.widgets.TextInput.from_param(
+            self.param.search_filter, name="Search Path", placeholder="Enter text to filter by path..."
         )
 
-        # Use custom path if provided, otherwise use selected
-        final_destination = custom_path if custom_path else destination
+        # Create file list tabulator (will be updated reactively)
+        self.file_tabulator = None
 
-        # Execute move button
-        if st.button("Execute Move", type="primary", disabled=not final_destination):
-            if final_destination:
-                with st.spinner("Moving files..."):
-                    result = move_files(selected_ids, final_destination)
+        # Create template
+        self.template = pn.template.BootstrapTemplate(
+            title="Experiment Browser",
+            header_background="#2c3e50"
+        )
 
-                # Show results
-                if result['success']:
-                    st.success(f"✓ Successfully moved {len(result['success'])} file(s)")
-                    for fname in result['success']:
-                        st.caption(f"  • {fname}")
+        # Build UI
+        self._build_ui()
 
-                if result['failed']:
-                    st.warning(f"⚠ Failed to move {len(result['failed'])} file(s)")
-                    for msg in result['failed']:
-                        st.caption(f"  • {msg}")
+    def _update_filter_options(self):
+        """Update filter dropdown options from database."""
+        file_types = ["All"] + get_unique_file_types()
+        owners = ["All"] + get_unique_owners()
 
-                if result['errors']:
-                    st.error(f"✗ Errors occurred:")
-                    for msg in result['errors']:
-                        st.caption(f"  • {msg}")
+        self.param.file_type_filter.objects = file_types
+        self.param.owner_filter.objects = owners
 
-                # Clear selection and hide move panel after move
-                st.session_state.selected_file_ids = []
-                st.session_state.show_move_panel = False
-                st.rerun()
+    def _get_db_info_pane(self):
+        """Create database info panel."""
+        last_indexed = get_last_indexed_time()
+        db_path = Path(DB_PATH).absolute()
+        db_exists = db_path.exists()
 
-
-def render_file_metadata(file_id: int):
-    """Render detailed file metadata."""
-    st.subheader("File Metadata")
-
-    metadata = get_file_metadata(file_id)
-    if not metadata:
-        st.error("File not found.")
-        return
-
-    # Display metadata in organized sections
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("**Full Path:**")
-        st.code(metadata['path'], language=None)
-
-        st.markdown("**File Type:**")
-        st.text(metadata['file_type'])
-
-    with col2:
-        st.markdown("**Size:**")
-        st.text(format_file_size(metadata['size']))
-
-        st.markdown("**Owner:**")
-        st.text(metadata['owner'] or "Unknown")
-
-        st.markdown("**Last Modified:**")
-        st.text(format_timestamp(metadata['mtime']))
-
-
-def render_datasets_table(file_id: int):
-    """Render sortable datasets table."""
-    st.subheader("Datasets")
-
-    df = get_file_datasets(file_id)
-
-    if df.empty:
-        st.info("No datasets found in this file.")
-        return
-
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "key": st.column_config.TextColumn("Key", width="medium"),
-            "shape": st.column_config.TextColumn("Shape", width="small"),
-            "dtype": st.column_config.TextColumn("Data Type", width="small")
-        }
-    )
-
-    st.caption(f"Total datasets: {len(df)}")
-
-
-def render_empty_selection():
-    """Render placeholder when no file is selected."""
-    st.subheader("File Details")
-    st.info("Select a file from the list to view details")
-
-
-# ============================================================================
-# Main Application
-# ============================================================================
-
-def main():
-    """Main application entry point."""
-    # Page configuration
-    st.set_page_config(
-        page_title="Experiment Browser",
-        layout="wide",
-        initial_sidebar_state="collapsed"
-    )
-
-    init_session_state()
-
-    # Top bar
-    render_top_bar()
-    st.divider()
-
-    # Main layout: left (filters + file list) and right (details)
-    left_col, right_col = st.columns([1, 1])
-
-    with left_col:
-        # Filters
-        filters = render_filters()
-        st.divider()
-
-        # Query and display files
-        df = query_files(**filters)
-        render_file_list(df)
-
-    with right_col:
-        # Show move panel if files are selected
-        if st.session_state.selected_file_ids:
-            render_selected_files_panel(st.session_state.selected_file_ids)
+        if db_exists:
+            db_status = f"✓ `{db_path}`"
         else:
-            st.info("Select one or more files to view details or move them")
+            db_status = f"✗ `{db_path}` (not found)"
+
+        if last_indexed:
+            indexed_status = f"**Last indexed:** {last_indexed.strftime('%Y-%m-%d %H:%M:%S')}"
+        else:
+            indexed_status = "**Last indexed:** No data"
+
+        return pn.Column(
+            pn.pane.Markdown(f"**Database:** {db_status}"),
+            pn.pane.Markdown(indexed_status)
+        )
+
+    @pn.depends('file_type_filter', 'owner_filter', 'date_filter', 'search_filter', watch=True)
+    def _update_file_list(self):
+        """Reactively update file list when filters change."""
+        # Prepare filter values
+        file_type = self.file_type_filter if self.file_type_filter != "All" else None
+        owner = self.owner_filter if self.owner_filter != "All" else None
+        search_text = self.search_filter if self.search_filter else None
+
+        # Convert date to datetime
+        if self.date_filter:
+            modified_after = datetime.combine(self.date_filter, datetime.min.time())
+        else:
+            modified_after = None
+
+        # Query files
+        df = query_files(
+            file_type=file_type,
+            owner=owner,
+            modified_after=modified_after,
+            search_text=search_text
+        )
+
+        # Prepare display dataframe
+        if not df.empty:
+            display_df = df[['filename', 'owner', 'size', 'modified']].copy()
+            display_df['size'] = display_df['size'].apply(format_file_size)
+            display_df['modified'] = display_df['modified'].dt.strftime('%Y-%m-%d %H:%M')
+
+            # Store original df for ID lookup
+            self._current_df = df
+
+            # Create or update tabulator
+            if self.file_tabulator is None:
+                self.file_tabulator = pn.widgets.Tabulator(
+                    display_df,
+                    selectable='checkbox',
+                    height=600,
+                    disabled=True,
+                    show_index=False
+                )
+                self.file_tabulator.param.watch(self._on_selection_change, 'selection')
+            else:
+                self.file_tabulator.value = display_df
+        else:
+            self._current_df = pd.DataFrame()
+            if self.file_tabulator is None:
+                self.file_tabulator = pn.pane.Markdown("No files match the current filters.")
+            else:
+                # Replace with message
+                self.file_tabulator = pn.pane.Markdown("No files match the current filters.")
+
+    def _on_selection_change(self, event):
+        """Handle file selection changes."""
+        if hasattr(self, '_current_df') and not self._current_df.empty:
+            selected_indices = event.new
+            if selected_indices:
+                self.selected_file_ids = [int(self._current_df.iloc[idx]['id']) for idx in selected_indices]
+            else:
+                self.selected_file_ids = []
+
+    @pn.depends('selected_file_ids')
+    def _get_file_details_panel(self):
+        """Create file details panel based on selection."""
+        if not self.selected_file_ids:
+            return pn.pane.Markdown("### File Details\n\nSelect one or more files to view details or move them")
+
+        panels = []
+        panels.append(pn.pane.Markdown(f"### Selected Files ({len(self.selected_file_ids)})"))
+
+        # Show details for each selected file
+        for file_id in self.selected_file_ids:
+            metadata = get_file_metadata(file_id)
+            if metadata:
+                filename = Path(metadata['path']).name
+
+                # File metadata
+                metadata_pane = pn.Column(
+                    pn.Row(
+                        pn.Column(
+                            pn.pane.Markdown("**Path:**"),
+                            pn.pane.Code(metadata['path'], language=None),
+                            pn.pane.Markdown("**Type:**"),
+                            pn.pane.Markdown(metadata['file_type'])
+                        ),
+                        pn.Column(
+                            pn.pane.Markdown("**Size:**"),
+                            pn.pane.Markdown(format_file_size(metadata['size'])),
+                            pn.pane.Markdown("**Owner:**"),
+                            pn.pane.Markdown(metadata['owner'] or "Unknown")
+                        )
+                    )
+                )
+
+                # Datasets table
+                datasets_df = get_file_datasets(file_id)
+                if not datasets_df.empty:
+                    datasets_pane = pn.widgets.Tabulator(
+                        datasets_df,
+                        show_index=False,
+                        disabled=True,
+                        height=200
+                    )
+                else:
+                    datasets_pane = pn.pane.Markdown("No datasets found")
+
+                # Create accordion item
+                file_panel = pn.Card(
+                    metadata_pane,
+                    pn.pane.Markdown("**Datasets:**"),
+                    datasets_pane,
+                    title=f"📁 {filename}",
+                    collapsed=(len(self.selected_file_ids) > 1)
+                )
+                panels.append(file_panel)
+
+        # Add move button and panel
+        panels.append(pn.layout.Divider())
+        panels.append(self._get_move_panel())
+
+        return pn.Column(*panels)
+
+    def _toggle_move_panel(self, event):
+        """Toggle move panel visibility."""
+        self.show_move_panel = not self.show_move_panel
+
+    @pn.depends('show_move_panel', 'selected_file_ids')
+    def _get_move_panel(self):
+        """Create move panel with directory selection."""
+        # Move button
+        move_button = pn.widgets.Button(
+            name="📦 Move" if not self.show_move_panel else "❌ Cancel",
+            button_type="primary" if not self.show_move_panel else "danger",
+            width=150
+        )
+        move_button.on_click(self._toggle_move_panel)
+
+        panels = [move_button]
+
+        if self.show_move_panel and self.selected_file_ids:
+            # Get existing directories
+            existing_dirs = get_existing_directories()
+
+            # Directory selection
+            use_existing_checkbox = pn.widgets.Checkbox(
+                name="Choose from existing directories",
+                value=True
+            )
+
+            dir_select = pn.widgets.Select(
+                name="Select directory",
+                options=existing_dirs,
+                value=existing_dirs[0] if existing_dirs else None,
+                width=400
+            )
+
+            custom_path_input = pn.widgets.TextInput(
+                name="Or enter custom path",
+                placeholder="/path/to/destination",
+                width=400
+            )
+
+            # Execute move button
+            execute_button = pn.widgets.Button(
+                name="Execute Move",
+                button_type="success",
+                width=150
+            )
+
+            # Result pane (initially empty)
+            result_pane = pn.Column()
+
+            def execute_move(event):
+                """Execute the move operation."""
+                destination = custom_path_input.value if custom_path_input.value else dir_select.value
+
+                if destination:
+                    result = move_files(self.selected_file_ids, destination)
+
+                    # Build result message
+                    messages = []
+                    if result['success']:
+                        messages.append(pn.pane.Alert(
+                            f"✓ Successfully moved {len(result['success'])} file(s):\n" +
+                            "\n".join(f"  • {fname}" for fname in result['success']),
+                            alert_type="success"
+                        ))
+
+                    if result['failed']:
+                        messages.append(pn.pane.Alert(
+                            f"⚠ Failed to move {len(result['failed'])} file(s):\n" +
+                            "\n".join(f"  • {msg}" for msg in result['failed']),
+                            alert_type="warning"
+                        ))
+
+                    if result['errors']:
+                        messages.append(pn.pane.Alert(
+                            f"✗ Errors occurred:\n" +
+                            "\n".join(f"  • {msg}" for msg in result['errors']),
+                            alert_type="danger"
+                        ))
+
+                    result_pane.clear()
+                    result_pane.extend(messages)
+
+                    # Reset state
+                    self.selected_file_ids = []
+                    self.show_move_panel = False
+
+            execute_button.on_click(execute_move)
+
+            panels.extend([
+                pn.pane.Markdown("### Move Files"),
+                use_existing_checkbox,
+                dir_select,
+                pn.pane.Markdown("**Or enter custom path:**"),
+                custom_path_input,
+                execute_button,
+                result_pane
+            ])
+
+        return pn.Column(*panels)
+
+    def _build_ui(self):
+        """Build the complete UI layout."""
+        # Header info
+        db_info = self._get_db_info_pane()
+        self.template.header.append(db_info)
+
+        # Left column: Filters and file list
+        filters_panel = pn.Column(
+            pn.pane.Markdown("## Filters"),
+            self.file_type_widget,
+            self.owner_widget,
+            self.date_widget,
+            self.search_widget,
+            pn.layout.Divider()
+        )
+
+        # Initialize file list
+        self._update_file_list()
+
+        file_list_panel = pn.Column(
+            pn.pane.Markdown("## Files"),
+            self.file_tabulator
+        )
+
+        left_column = pn.Column(filters_panel, file_list_panel)
+
+        # Right column: File details
+        right_column = pn.Column(self._get_file_details_panel)
+
+        # Create grid layout
+        grid = pn.GridSpec(ncols=2, nrows=1, sizing_mode='stretch_width')
+        grid[0, 0] = left_column
+        grid[0, 1] = right_column
+
+        # Add to template
+        self.template.main.append(grid)
+
+    def servable(self):
+        """Return the servable template."""
+        return self.template
 
 
-if __name__ == "__main__":
-    main()
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+
+# Create and serve the application
+browser = ExperimentBrowser()
+app = browser.servable()
+
+# Make it servable for panel serve command
+app.servable()
