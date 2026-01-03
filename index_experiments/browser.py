@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 
 # Constants
-DB_PATH = "experiments.db"
+DB_PATH = str(Path(__file__).parent / "experiments.db")
 
 # ============================================================================
 # Database Query Functions
@@ -111,19 +111,32 @@ def query_files(
 
 def get_file_metadata(file_id: int) -> Optional[dict]:
     """Get detailed metadata for a specific file."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, path, file_type, size, mtime, owner
-        FROM files
-        WHERE id = ?
-    """, (file_id,))
-    result = cur.fetchone()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
 
-    if result:
-        return dict(result)
-    return None
+        # Debug: Check if ID exists
+        cur.execute("SELECT COUNT(*) FROM files WHERE id = ?", (file_id,))
+        count = cur.fetchone()[0]
+
+        if count == 0:
+            st.warning(f"Debug: No file found with id={file_id}")
+            return None
+
+        cur.execute("""
+            SELECT id, path, file_type, size, mtime, owner
+            FROM files
+            WHERE id = ?
+        """, (file_id,))
+        result = cur.fetchone()
+        conn.close()
+
+        if result:
+            return dict(result)
+        return None
+    except Exception as e:
+        st.error(f"Database error: {e}")
+        return None
 
 
 def get_file_datasets(file_id: int) -> pd.DataFrame:
@@ -176,9 +189,15 @@ def render_top_bar():
     last_indexed = get_last_indexed_time()
     db_path = Path(DB_PATH).absolute()
 
+    # Check if database exists
+    db_exists = db_path.exists()
+
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.caption(f"**Database:** `{db_path}`")
+        if db_exists:
+            st.caption(f"**Database:** `{db_path}` ✓")
+        else:
+            st.error(f"**Database not found:** `{db_path}` ✗")
     with col2:
         if last_indexed:
             st.caption(f"**Last indexed:** {last_indexed.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -251,8 +270,10 @@ def render_file_list(df: pd.DataFrame):
     # Handle selection
     if event.selection.rows:
         selected_idx = event.selection.rows[0]
-        selected_file_id = df.iloc[selected_idx]['id']
+        selected_file_id = int(df.iloc[selected_idx]['id'])  # Ensure it's an int
         st.session_state.selected_file_id = selected_file_id
+        # Debug info (can remove after fixing)
+        st.caption(f"Selected file ID: {selected_file_id}")
 
 
 def render_file_metadata(file_id: int):
