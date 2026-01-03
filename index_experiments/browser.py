@@ -258,6 +258,8 @@ def init_session_state():
     """Initialize session state variables."""
     if 'selected_file_ids' not in st.session_state:
         st.session_state.selected_file_ids = []
+    if 'show_move_panel' not in st.session_state:
+        st.session_state.show_move_panel = False
 
 
 def render_top_bar():
@@ -356,84 +358,112 @@ def render_file_list(df: pd.DataFrame):
 
 
 def render_selected_files_panel(selected_ids: List[int]):
-    """Show selected files and move operations."""
+    """Show selected files with datasets and optional move operations."""
     if not selected_ids:
-        st.info("Select files to enable move operations")
+        st.info("Select files to view details")
         return
 
     st.subheader(f"Selected Files ({len(selected_ids)})")
 
-    # Show list of selected files
-    selected_files = []
+    # Show datasets for each selected file
     for file_id in selected_ids:
         metadata = get_file_metadata(file_id)
         if metadata:
-            selected_files.append({
-                'id': file_id,
-                'filename': Path(metadata['path']).name,
-                'path': metadata['path']
-            })
+            filename = Path(metadata['path']).name
 
-    # Display as a simple list
-    for f in selected_files:
-        st.text(f"• {f['filename']}")
+            # Use expander for each file
+            with st.expander(f"📁 {filename}", expanded=(len(selected_ids) == 1)):
+                # File metadata
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.caption("**Path:**")
+                    st.code(metadata['path'], language=None)
+                    st.caption("**Type:**")
+                    st.text(metadata['file_type'])
+
+                with col2:
+                    st.caption("**Size:**")
+                    st.text(format_file_size(metadata['size']))
+                    st.caption("**Owner:**")
+                    st.text(metadata['owner'] or "Unknown")
+
+                # Datasets table
+                st.caption("**Datasets:**")
+                datasets_df = get_file_datasets(file_id)
+                if not datasets_df.empty:
+                    st.dataframe(
+                        datasets_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("No datasets found")
 
     st.divider()
 
-    # Destination directory selector
-    st.subheader("Move To")
+    # Move button to toggle move panel
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("📦 Move" if not st.session_state.show_move_panel else "❌ Cancel",
+                     use_container_width=True):
+            st.session_state.show_move_panel = not st.session_state.show_move_panel
+            st.rerun()
 
-    # Get existing directories
-    existing_dirs = get_existing_directories()
+    # Show move panel if toggled
+    if st.session_state.show_move_panel:
+        st.subheader("Move Files")
 
-    # Dropdown for existing directories
-    use_existing = st.checkbox("Choose from existing directories", value=True)
+        # Get existing directories
+        existing_dirs = get_existing_directories()
 
-    destination = None
-    if use_existing and existing_dirs:
-        destination = st.selectbox(
-            "Select directory",
-            options=existing_dirs,
-            key="dest_dir_select"
+        # Dropdown for existing directories
+        use_existing = st.checkbox("Choose from existing directories", value=True)
+
+        destination = None
+        if use_existing and existing_dirs:
+            destination = st.selectbox(
+                "Select directory",
+                options=existing_dirs,
+                key="dest_dir_select"
+            )
+
+        # Text input for custom path
+        st.markdown("**Or enter custom path:**")
+        custom_path = st.text_input(
+            "Destination directory",
+            placeholder="/path/to/destination",
+            key="dest_dir_input"
         )
 
-    # Text input for custom path
-    st.markdown("**Or enter custom path:**")
-    custom_path = st.text_input(
-        "Destination directory",
-        placeholder="/path/to/destination",
-        key="dest_dir_input"
-    )
+        # Use custom path if provided, otherwise use selected
+        final_destination = custom_path if custom_path else destination
 
-    # Use custom path if provided, otherwise use selected
-    final_destination = custom_path if custom_path else destination
+        # Execute move button
+        if st.button("Execute Move", type="primary", disabled=not final_destination):
+            if final_destination:
+                with st.spinner("Moving files..."):
+                    result = move_files(selected_ids, final_destination)
 
-    # Move button
-    if st.button("Move Files", type="primary", disabled=not final_destination):
-        if final_destination:
-            # Confirm dialog using st.dialog or modal
-            with st.spinner("Moving files..."):
-                result = move_files(selected_ids, final_destination)
+                # Show results
+                if result['success']:
+                    st.success(f"✓ Successfully moved {len(result['success'])} file(s)")
+                    for fname in result['success']:
+                        st.caption(f"  • {fname}")
 
-            # Show results
-            if result['success']:
-                st.success(f"✓ Successfully moved {len(result['success'])} file(s)")
-                for fname in result['success']:
-                    st.caption(f"  • {fname}")
+                if result['failed']:
+                    st.warning(f"⚠ Failed to move {len(result['failed'])} file(s)")
+                    for msg in result['failed']:
+                        st.caption(f"  • {msg}")
 
-            if result['failed']:
-                st.warning(f"⚠ Failed to move {len(result['failed'])} file(s)")
-                for msg in result['failed']:
-                    st.caption(f"  • {msg}")
+                if result['errors']:
+                    st.error(f"✗ Errors occurred:")
+                    for msg in result['errors']:
+                        st.caption(f"  • {msg}")
 
-            if result['errors']:
-                st.error(f"✗ Errors occurred:")
-                for msg in result['errors']:
-                    st.caption(f"  • {msg}")
-
-            # Clear selection after move
-            st.session_state.selected_file_ids = []
-            st.rerun()
+                # Clear selection and hide move panel after move
+                st.session_state.selected_file_ids = []
+                st.session_state.show_move_panel = False
+                st.rerun()
 
 
 def render_file_metadata(file_id: int):
