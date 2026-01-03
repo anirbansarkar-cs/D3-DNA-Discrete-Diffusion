@@ -4,6 +4,13 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List
+import shutil
+import sys
+
+# Add index_experiments directory to path for imports
+sys.path.append(str(Path(__file__).parent))
+from scan_file import scan_file
+from index_experiments import insert_file
 
 # Constants
 DB_PATH = str(Path(__file__).parent / "experiments.db")
@@ -153,6 +160,77 @@ def get_file_datasets(file_id: int) -> pd.DataFrame:
     return df
 
 
+def get_existing_directories() -> List[str]:
+    """Get list of unique directory paths from files in database."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT path FROM files")
+    paths = [Path(row[0]).parent for row in cur.fetchall()]
+    unique_dirs = sorted(set(str(p) for p in paths))
+    conn.close()
+    return unique_dirs
+
+
+def move_files(file_ids: List[int], destination_dir: str) -> dict:
+    """
+    Move files to destination directory and update database.
+
+    Args:
+        file_ids: List of file IDs to move
+        destination_dir: Destination directory path
+
+    Returns:
+        dict with 'success', 'failed', and 'errors' lists
+    """
+    conn = get_db_connection()
+    result = {
+        'success': [],
+        'failed': [],
+        'errors': []
+    }
+
+    # Get file metadata for each file_id
+    for file_id in file_ids:
+        try:
+            metadata = get_file_metadata(file_id)
+            if not metadata:
+                result['failed'].append(f"File ID {file_id} not found")
+                continue
+
+            old_path = Path(metadata['path'])
+
+            # Create destination directory if it doesn't exist
+            dest_dir = Path(destination_dir)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            # New path with same filename
+            new_path = dest_dir / old_path.name
+
+            # Check if destination already exists
+            if new_path.exists() and new_path != old_path:
+                result['failed'].append(f"{old_path.name}: Destination already exists")
+                continue
+
+            # Move the file
+            if old_path.exists():
+                shutil.move(str(old_path), str(new_path))
+
+                # Re-scan and update database
+                file_info = scan_file(new_path)
+                insert_file(conn, file_info)
+                conn.commit()
+
+                result['success'].append(old_path.name)
+            else:
+                result['failed'].append(f"{old_path.name}: Source file not found")
+
+        except Exception as e:
+            result['errors'].append(f"{metadata.get('path', file_id)}: {str(e)}")
+
+    conn.close()
+    return result
+
+
 # ============================================================================
 # Utility Functions
 # ============================================================================
@@ -178,8 +256,8 @@ def format_timestamp(timestamp: float) -> str:
 
 def init_session_state():
     """Initialize session state variables."""
-    if 'selected_file_id' not in st.session_state:
-        st.session_state.selected_file_id = None
+    if 'selected_file_ids' not in st.session_state:
+        st.session_state.selected_file_ids = []
 
 
 def render_top_bar():
@@ -257,23 +335,105 @@ def render_file_list(df: pd.DataFrame):
     display_df['size'] = display_df['size'].apply(format_file_size)
     display_df['modified'] = display_df['modified'].dt.strftime('%Y-%m-%d %H:%M')
 
-    # Configure selection
+    # Configure multiselect
     event = st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True,
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row",
         height=600
     )
 
-    # Handle selection
+    # Handle multiple selections
     if event.selection.rows:
-        selected_idx = event.selection.rows[0]
-        selected_file_id = int(df.iloc[selected_idx]['id'])  # Ensure it's an int
-        st.session_state.selected_file_id = selected_file_id
-        # Debug info (can remove after fixing)
-        st.caption(f"Selected file ID: {selected_file_id}")
+        selected_indices = event.selection.rows
+        selected_file_ids = [int(df.iloc[idx]['id']) for idx in selected_indices]
+        st.session_state.selected_file_ids = selected_file_ids
+        st.caption(f"Selected {len(selected_file_ids)} file(s)")
+    else:
+        st.session_state.selected_file_ids = []
+
+
+def render_selected_files_panel(selected_ids: List[int]):
+    """Show selected files and move operations."""
+    if not selected_ids:
+        st.info("Select files to enable move operations")
+        return
+
+    st.subheader(f"Selected Files ({len(selected_ids)})")
+
+    # Show list of selected files
+    selected_files = []
+    for file_id in selected_ids:
+        metadata = get_file_metadata(file_id)
+        if metadata:
+            selected_files.append({
+                'id': file_id,
+                'filename': Path(metadata['path']).name,
+                'path': metadata['path']
+            })
+
+    # Display as a simple list
+    for f in selected_files:
+        st.text(f"• {f['filename']}")
+
+    st.divider()
+
+    # Destination directory selector
+    st.subheader("Move To")
+
+    # Get existing directories
+    existing_dirs = get_existing_directories()
+
+    # Dropdown for existing directories
+    use_existing = st.checkbox("Choose from existing directories", value=True)
+
+    destination = None
+    if use_existing and existing_dirs:
+        destination = st.selectbox(
+            "Select directory",
+            options=existing_dirs,
+            key="dest_dir_select"
+        )
+
+    # Text input for custom path
+    st.markdown("**Or enter custom path:**")
+    custom_path = st.text_input(
+        "Destination directory",
+        placeholder="/path/to/destination",
+        key="dest_dir_input"
+    )
+
+    # Use custom path if provided, otherwise use selected
+    final_destination = custom_path if custom_path else destination
+
+    # Move button
+    if st.button("Move Files", type="primary", disabled=not final_destination):
+        if final_destination:
+            # Confirm dialog using st.dialog or modal
+            with st.spinner("Moving files..."):
+                result = move_files(selected_ids, final_destination)
+
+            # Show results
+            if result['success']:
+                st.success(f"✓ Successfully moved {len(result['success'])} file(s)")
+                for fname in result['success']:
+                    st.caption(f"  • {fname}")
+
+            if result['failed']:
+                st.warning(f"⚠ Failed to move {len(result['failed'])} file(s)")
+                for msg in result['failed']:
+                    st.caption(f"  • {msg}")
+
+            if result['errors']:
+                st.error(f"✗ Errors occurred:")
+                for msg in result['errors']:
+                    st.caption(f"  • {msg}")
+
+            # Clear selection after move
+            st.session_state.selected_file_ids = []
+            st.rerun()
 
 
 def render_file_metadata(file_id: int):
@@ -368,13 +528,11 @@ def main():
         render_file_list(df)
 
     with right_col:
-        # Display selected file details
-        if st.session_state.selected_file_id:
-            render_file_metadata(st.session_state.selected_file_id)
-            st.divider()
-            render_datasets_table(st.session_state.selected_file_id)
+        # Show move panel if files are selected
+        if st.session_state.selected_file_ids:
+            render_selected_files_panel(st.session_state.selected_file_ids)
         else:
-            render_empty_selection()
+            st.info("Select one or more files to view details or move them")
 
 
 if __name__ == "__main__":
