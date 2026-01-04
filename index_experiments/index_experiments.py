@@ -15,23 +15,43 @@ def get_known_files(conn):
     return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
 
 def insert_file(conn, file_info):
+    """Insert or update a file in the database. Only adds/updates, never deletes existing files."""
     cur = conn.cursor()
 
-    cur.execute("""
-    INSERT OR REPLACE INTO files (path, file_type, size, mtime, owner)
-    VALUES (?, ?, ?, ?, ?)
-    """, (
-        file_info["path"],
-        file_info["file_type"],
-        file_info["size"],
-        file_info["mtime"],
-        file_info["owner"]
-    ))
+    # Check if file already exists
+    cur.execute("SELECT id FROM files WHERE path = ?", (file_info["path"],))
+    existing = cur.fetchone()
 
-    file_id = cur.lastrowid
+    if existing:
+        # Update existing file
+        file_id = existing[0]
+        cur.execute("""
+        UPDATE files SET file_type=?, size=?, mtime=?, owner=?
+        WHERE id=?
+        """, (
+            file_info["file_type"],
+            file_info["size"],
+            file_info["mtime"],
+            file_info["owner"],
+            file_id
+        ))
+        # Delete old datasets for this file
+        cur.execute("DELETE FROM datasets WHERE file_id = ?", (file_id,))
+    else:
+        # Insert new file
+        cur.execute("""
+        INSERT INTO files (path, file_type, size, mtime, owner)
+        VALUES (?, ?, ?, ?, ?)
+        """, (
+            file_info["path"],
+            file_info["file_type"],
+            file_info["size"],
+            file_info["mtime"],
+            file_info["owner"]
+        ))
+        file_id = cur.lastrowid
 
-    cur.execute("DELETE FROM datasets WHERE file_id = ?", (file_id,))
-
+    # Insert datasets
     for ds in file_info["datasets"]:
         cur.execute("""
         INSERT INTO datasets (file_id, key, shape, dtype)
