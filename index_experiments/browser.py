@@ -1511,20 +1511,23 @@ class ExperimentBrowser(param.Parameterized):
                 buf.seek(0)
                 png_data = buf.getvalue()
 
-                # Label for multiple figures
-                if len(captured_figures) > 1:
-                    figure_panes.append(pn.pane.Markdown(f"**Figure {i + 1}**", styles={'margin': '10px 0 5px 0', 'font-size': '12px'}))
-
-                # Create pane for this figure - use fixed height to prevent overlap
-                figure_panes.append(pn.pane.PNG(png_data, sizing_mode='scale_width'))
-
-                # Add separator between figures
-                if i < len(captured_figures) - 1:
-                    figure_panes.append(pn.layout.Divider(margin=(10, 0, 10, 0)))
+                # Each figure in its own column with label
+                fig_column = pn.Column(
+                    pn.pane.Markdown(f"**Fig {i + 1}**", styles={'font-size': '11px', 'margin': '0 0 5px 0'}) if len(captured_figures) > 1 else None,
+                    pn.pane.PNG(png_data, height=400),
+                    width=500,
+                    styles={'flex-shrink': '0'}
+                )
+                figure_panes.append(fig_column)
 
             plt.close('all')
 
-            return pn.Column(*figure_panes, sizing_mode='stretch_width', scroll=True)
+            # Horizontal layout with scrolling
+            return pn.Row(
+                *figure_panes,
+                sizing_mode='stretch_width',
+                styles={'overflow-x': 'auto', 'overflow-y': 'hidden', 'flex-wrap': 'nowrap'}
+            )
 
         except SyntaxError as e:
             return pn.pane.Alert(f"**Syntax Error:** {str(e)}", alert_type="danger")
