@@ -776,8 +776,6 @@ def validate_dataset_for_plotting(data: np.ndarray, dataset_key: str) -> tuple:
     """
     Validate dataset is suitable for plotting.
 
-    Failure & edge handling: Explicitly checks for common issues.
-
     Args:
         data: NumPy array to validate
         dataset_key: Name for error messages
@@ -793,16 +791,12 @@ def validate_dataset_for_plotting(data: np.ndarray, dataset_key: str) -> tuple:
     if not np.issubdtype(data.dtype, np.number):
         return False, f"Dataset '{dataset_key}' has non-numeric dtype: {data.dtype}"
 
-    # Check for all NaN or Inf
+    # Check for all NaN or Inf (only for numeric data)
     if np.all(np.isnan(data)):
         return False, f"Dataset '{dataset_key}' contains only NaN values"
 
     if np.all(np.isinf(data)):
         return False, f"Dataset '{dataset_key}' contains only Inf values"
-
-    # Check dimensionality (only 1D and 2D supported)
-    if data.ndim > 2:
-        return False, f"Dataset '{dataset_key}' has {data.ndim} dimensions (only 1D and 2D supported)"
 
     return True, None
 
@@ -854,7 +848,7 @@ class ExperimentBrowser(param.Parameterized):
 
     # Matplotlib code for raw visualization
     matplotlib_code = param.String(
-        default="plt.figure(figsize=(10, 4))\nplt.plot(x, y)\nplt.xlabel('Index')\nplt.ylabel('Value')\nplt.title('Dataset Visualization')",
+        default="# Variable 'data' contains your chunked dataset\n# Use the exact dataset key name as variable\nplt.figure(figsize=(10, 4))\nif data.ndim == 1:\n    plt.plot(data)\nelif data.ndim == 2:\n    plt.imshow(data, aspect='auto')\n    plt.colorbar()\nplt.title(f'Shape: {data.shape}')",
         doc="Custom matplotlib code for raw visualization"
     )
 
@@ -1066,11 +1060,26 @@ class ExperimentBrowser(param.Parameterized):
             else:
                 self.selected_file_ids = []
 
+    def _remove_file_from_selection(self, file_id):
+        """Remove a file from the selection."""
+        if file_id in self.selected_file_ids:
+            new_selection = [fid for fid in self.selected_file_ids if fid != file_id]
+            self.selected_file_ids = new_selection
+            # Also update the tabulator selection if possible
+            if hasattr(self, 'file_tabulator') and self.file_tabulator is not None:
+                if hasattr(self, '_current_df') and not self._current_df.empty:
+                    # Find indices that should remain selected
+                    new_indices = []
+                    for idx, row in self._current_df.iterrows():
+                        if int(row['id']) in new_selection:
+                            new_indices.append(idx)
+                    self.file_tabulator.selection = new_indices
+
     @pn.depends('selected_file_ids')
     def _get_file_details_panel(self):
         """Create file details panel based on selection."""
         if not self.selected_file_ids:
-            return pn.pane.Markdown("### File Details\n\nSelect one or more files to view details or move them")
+            return pn.pane.Markdown("### File Details\n\n_Select files to view details_")
 
         panels = []
         panels.append(pn.pane.Markdown(f"### Selected Files ({len(self.selected_file_ids)})"))
@@ -1080,90 +1089,86 @@ class ExperimentBrowser(param.Parameterized):
             metadata = get_file_metadata(file_id)
             if metadata:
                 filename = Path(metadata['path']).name
+                file_size = format_file_size(metadata['size'])
+                owner = metadata['owner'] or "?"
+                file_type = metadata['file_type']
 
-                # File metadata
-                metadata_pane = pn.Column(
-                    pn.Row(
-                        pn.Column(
-                            pn.pane.Markdown("**Path:**"),
-                            pn.pane.Markdown(f"`{metadata['path']}`"),
-                            pn.pane.Markdown("**Type:**"),
-                            pn.pane.Markdown(metadata['file_type'])
-                        ),
-                        pn.Column(
-                            pn.pane.Markdown("**Size:**"),
-                            pn.pane.Markdown(format_file_size(metadata['size'])),
-                            pn.pane.Markdown("**Owner:**"),
-                            pn.pane.Markdown(metadata['owner'] or "Unknown")
-                        )
-                    )
+                # Create remove button for this file
+                remove_btn = pn.widgets.Button(name="✕", button_type="light", width=30, height=25)
+                # Capture file_id in closure
+                def make_remove_callback(fid):
+                    def callback(event):
+                        self._remove_file_from_selection(fid)
+                    return callback
+                remove_btn.on_click(make_remove_callback(file_id))
+
+                # Compact metadata - single line
+                info_text = f"`{filename}` | {file_size} | {owner} | {file_type}"
+                path_text = f"_{metadata['path']}_"
+
+                # Header row with remove button
+                header_row = pn.Row(
+                    pn.pane.Markdown(info_text, width=400),
+                    remove_btn,
+                    align='center'
                 )
 
-                # Datasets table (clickable)
+                # Datasets table (clickable) - compact
                 datasets_df = get_file_datasets(file_id)
                 if not datasets_df.empty:
                     datasets_tabulator = pn.widgets.Tabulator(
                         datasets_df,
                         show_index=False,
-                        selectable='toggle',  # Make rows clickable
-                        disabled=True,  # Prevent cell editing on click
-                        height=200
+                        selectable='toggle',
+                        disabled=True,
+                        height=min(150, 30 + len(datasets_df) * 25),  # Compact height
+                        width=450
                     )
 
                     # Store file_id in a closure for the callback
                     current_file_id = file_id
 
                     # Add selection callback
-                    def on_dataset_select(event):
-                        if event.new:  # If a row is selected
+                    def on_dataset_select(event, fid=current_file_id, df=datasets_df):
+                        if event.new:
                             selected_idx = event.new[0]
-                            selected_dataset = datasets_df.iloc[selected_idx]
+                            selected_dataset = df.iloc[selected_idx]
                             dataset_key = selected_dataset['key']
 
-                            # Get file metadata to get path
-                            file_meta = get_file_metadata(current_file_id)
+                            file_meta = get_file_metadata(fid)
                             if file_meta:
-                                # Update FileDataState (not a Param object)
                                 self.file_data_state.set_file(file_meta['path'])
                                 self.file_data_state.set_dataset(dataset_key)
-
-                                # Update PlotState (reactive parameters)
                                 self.current_file_path = file_meta['path']
                                 self.current_dataset_key = dataset_key
 
-                                # Reset view window based on dataset shape
                                 if self.file_data_state.dataset_shape:
                                     max_dim = int(self.file_data_state.dataset_shape[0])
                                     self.x_start = 0
-                                    self.x_end = min(max_dim, 1000)  # Default to first 1000 points
-
-                                    # Reset y_range (will auto-range on first render)
+                                    self.x_end = min(max_dim, 1000)
                                     self.y_min = 0.0
                                     self.y_max = 1.0
-
-                                    # Trigger plot update
                                     self.plot_version += 1
 
                     datasets_tabulator.param.watch(on_dataset_select, 'selection')
                     datasets_pane = datasets_tabulator
                 else:
-                    datasets_pane = pn.pane.Markdown("No datasets found")
+                    datasets_pane = pn.pane.Markdown("_No datasets_")
 
-                # Create accordion item
-                file_panel = pn.Card(
-                    metadata_pane,
-                    pn.pane.Markdown("**Datasets:**"),
+                # Compact file panel
+                file_panel = pn.Column(
+                    header_row,
+                    pn.pane.Markdown(path_text, styles={'font-size': '10px', 'color': '#666'}),
                     datasets_pane,
-                    title=f"📁 {filename}",
-                    collapsed=(len(self.selected_file_ids) > 1)
+                    pn.layout.Divider(),
+                    sizing_mode='stretch_width'
                 )
                 panels.append(file_panel)
 
         # Add move button and panel
-        panels.append(pn.layout.Divider())
         panels.append(self._get_move_panel())
 
-        return pn.Column(*panels)
+        return pn.Column(*panels, sizing_mode='stretch_width')
 
     def _toggle_move_panel(self, event):
         """Toggle move panel visibility."""
@@ -1475,39 +1480,47 @@ class ExperimentBrowser(param.Parameterized):
 
             controls.append(pn.pane.Markdown("### Plot Controls"))
 
-            # Dataset info
+            # Dataset info - show full shape for all dimensions
             if self.file_data_state.dataset_shape:
-                shape_str = " × ".join(str(d) for d in self.file_data_state.dataset_shape)
+                shape = self.file_data_state.dataset_shape
+                shape_str = str(shape)
+
                 controls.append(pn.pane.Markdown(
                     f"**Selected Dataset:** `{self.current_dataset_key}`  \n"
                     f"**Shape:** {shape_str}  \n"
                     f"**Dtype:** {self.file_data_state.dataset_dtype}"
                 ))
 
-                # X range slider (for first dimension)
-                max_dim = int(self.file_data_state.dataset_shape[0])
+                # Chunking range slider (along dimension 0)
+                max_dim = int(shape[0])
 
-                x_range_slider = pn.widgets.RangeSlider(
-                    name="X Range",
+                controls.append(pn.pane.Markdown(
+                    f"**Chunk Range** _(along dimension 0, size={max_dim})_"
+                ))
+
+                chunk_slider = pn.widgets.RangeSlider(
+                    name="",
                     start=0,
                     end=max_dim,
-                    value=(self.x_start, self.x_end),
+                    value=(self.x_start, min(self.x_end, max_dim)),
                     step=1,
                     width=400
                 )
 
-                def update_x_range(event):
+                def update_chunk_range(event):
                     self.x_start, self.x_end = int(event.new[0]), int(event.new[1])
-                    # State is automatically updated via reactive parameters
-                    # No need to call set_slice_params - we read directly from dataset handle
+                    self.plot_version += 1
 
-                x_range_slider.param.watch(update_x_range, 'value')
-                controls.append(x_range_slider)
+                chunk_slider.param.watch(update_chunk_range, 'value')
+                controls.append(chunk_slider)
 
-                # Downsampling toggle
+                # Downsampling toggle with explanation
+                controls.append(pn.pane.Markdown(
+                    "**Downsampling** _(skip every N elements along dim 0 for faster loading)_"
+                ))
                 downsample_checkbox = pn.widgets.Checkbox.from_param(
                     self.param.downsample_enabled,
-                    name="Enable Downsampling"
+                    name="Enable"
                 )
                 controls.append(downsample_checkbox)
 
@@ -1515,7 +1528,7 @@ class ExperimentBrowser(param.Parameterized):
                 if self.downsample_enabled:
                     downsample_slider = pn.widgets.IntSlider.from_param(
                         self.param.downsample_factor,
-                        name="Downsample Factor",
+                        name="Step size",
                         width=400
                     )
                     controls.append(downsample_slider)
@@ -1524,7 +1537,7 @@ class ExperimentBrowser(param.Parameterized):
                 controls.append(pn.layout.Divider())
                 controls.append(pn.pane.Markdown("### Matplotlib Code"))
                 controls.append(pn.pane.Markdown(
-                    "_Variables available: `x` (indices), `y` (data values), `plt`, `np`_"
+                    f"_Variables: `{self.current_dataset_key}` (your data, shape will be chunked), `plt`, `np`_"
                 ))
 
                 code_editor = pn.widgets.TextAreaInput(
@@ -1552,23 +1565,19 @@ class ExperimentBrowser(param.Parameterized):
         """
         Read data slice from FileDataState based on current parameters.
 
-        Rules:
-        - Only reads what's needed (respects x_start, x_end, downsample)
-        - Uses Dask for large datasets
-        - No caching at this layer (handled by FileDataState)
-        - Applies performance guardrails
+        Chunks along dimension 0, supports any number of dimensions.
 
         Returns:
-            (x_vals, y_vals, metadata_dict) or (None, None, error_msg)
+            (data, metadata_dict) or (None, error_dict)
         """
         if not self.current_dataset_key:
-            return None, None, None
+            return None, None
 
         try:
-            # Apply performance guardrail: enforce minimum zoom window
+            # Get total size along dimension 0
             total_size = int(self.file_data_state.dataset_shape[0]) if self.file_data_state.dataset_shape else 0
             if total_size == 0:
-                return None, None, {"error": "Dataset has zero size"}
+                return None, {"error": "Dataset has zero size"}
 
             x_start, x_end = enforce_minimum_zoom(self.x_start, self.x_end, total_size)
 
@@ -1579,70 +1588,61 @@ class ExperimentBrowser(param.Parameterized):
 
             # Determine data source
             use_dask = self.file_data_state.should_use_dask()
-            dataset_size_mb = self.file_data_state.get_dataset_size_bytes() / (1024 * 1024)
 
-            # Get data based on source
+            # Get data based on source - chunk along dimension 0
             if use_dask:
                 dask_array = self.file_data_state.get_dask_array(chunks='primary')
                 if dask_array is None:
-                    return None, None, {"error": "Failed to create Dask array"}
+                    return None, {"error": "Failed to create Dask array"}
 
                 if self.downsample_enabled:
                     step = self.downsample_factor
                     data = dask_array[x_start:x_end:step].compute()
-                    x_vals = np.arange(x_start, x_end, step)
                 else:
                     data = dask_array[x_start:x_end].compute()
-                    x_vals = np.arange(x_start, x_end)
-
-                data_source = "Dask (lazy)"
             else:
                 dataset_handle = self.file_data_state.get_dataset_handle()
                 if dataset_handle is None:
-                    return None, None, {"error": "Dataset handle not available"}
+                    return None, {"error": "Dataset handle not available"}
 
                 if self.downsample_enabled:
                     step = self.downsample_factor
                     data = dataset_handle[x_start:x_end:step]
-                    x_vals = np.arange(x_start, x_end, step)
                 else:
                     data = dataset_handle[x_start:x_end]
-                    x_vals = np.arange(x_start, x_end)
 
-                data_source = "Direct (h5py)"
+            # Convert to numpy array if needed
+            data = np.asarray(data)
 
-            # Validate data before plotting
-            is_valid, error_msg = validate_dataset_for_plotting(data, self.current_dataset_key)
-            if not is_valid:
-                return None, None, {"error": error_msg}
-
-            # Compute metadata (handle NaN/Inf gracefully)
-            valid_data = data[np.isfinite(data)]
-            if len(valid_data) == 0:
-                return None, None, {"error": f"Dataset contains no finite values"}
+            # Compute metadata (handle NaN/Inf gracefully for numeric data)
+            if np.issubdtype(data.dtype, np.number):
+                flat_data = data.flatten()
+                valid_mask = np.isfinite(flat_data)
+                valid_data = flat_data[valid_mask]
+                if len(valid_data) == 0:
+                    data_min, data_max, data_mean = 0.0, 0.0, 0.0
+                else:
+                    data_min = float(valid_data.min())
+                    data_max = float(valid_data.max())
+                    data_mean = float(valid_data.mean())
+            else:
+                data_min, data_max, data_mean = 0.0, 0.0, 0.0
 
             metadata = {
-                'source': data_source,
-                'size_mb': dataset_size_mb,
-                'num_points': len(data),
-                'num_valid': len(valid_data),
-                'data_min': float(valid_data.min()),
-                'data_max': float(valid_data.max()),
-                'data_mean': float(valid_data.mean())
+                'data_min': data_min,
+                'data_max': data_max,
+                'data_mean': data_mean
             }
 
-            return x_vals, data, metadata
+            return data, metadata
 
         except KeyError as e:
-            # Missing chunks / corrupted files
-            return None, None, {"error": f"Missing data chunk: {e}"}
+            return None, {"error": f"Missing data chunk: {e}"}
         except IOError as e:
-            # File read errors
-            return None, None, {"error": f"File read error: {e}"}
+            return None, {"error": f"File read error: {e}"}
         except Exception as e:
-            # Catch-all for unexpected errors (fail locally, don't crash app)
             print(f"Error reading data slice: {e}")
-            return None, None, {"error": f"Unexpected error: {str(e)}"}
+            return None, {"error": f"Unexpected error: {str(e)}"}
 
     def _read_metric_slice(self):
         """
@@ -1704,13 +1704,12 @@ class ExperimentBrowser(param.Parameterized):
             print(f"Error computing metric slice: {e}")
             return None, None, {"error": f"Metric computation error: {str(e)}"}
 
-    def _execute_matplotlib_code(self, x_vals, y_vals, metadata):
+    def _execute_matplotlib_code(self, data, metadata):
         """
         Execute user's matplotlib code and return a Panel pane with the figure.
 
         Args:
-            x_vals: X coordinates (indices)
-            y_vals: Y values (data)
+            data: The chunked numpy array (any shape)
             metadata: Data metadata dict
 
         Returns:
@@ -1720,12 +1719,13 @@ class ExperimentBrowser(param.Parameterized):
             # Close any existing figures to prevent memory leaks
             plt.close('all')
 
-            # Create execution context with restricted globals
+            # Create execution context - use dataset key as variable name
+            dataset_key = self.current_dataset_key
             exec_globals = {
                 'plt': plt,
                 'np': np,
-                'x': x_vals,
-                'y': y_vals,
+                'data': data,  # Generic 'data' variable
+                dataset_key: data,  # Also available as the exact dataset key name
             }
 
             # Execute user code
@@ -1742,118 +1742,79 @@ class ExperimentBrowser(param.Parameterized):
             # Close figure to free memory
             plt.close(fig)
 
-            # Info text
+            # Minimal info text
             info_text = (
-                f"**Source:** {metadata['source']} | "
-                f"**Points:** {metadata['num_points']:,}"
-            )
-            if metadata['num_valid'] < metadata['num_points']:
-                info_text += f" ({metadata['num_points'] - metadata['num_valid']} NaN/Inf filtered)"
-            info_text += (
-                f"\n\n**Range:** X=[{self.x_start}:{self.x_end}] | "
+                f"**Chunk:** [{self.x_start}:{self.x_end}] | "
+                f"**Shape:** {data.shape} | "
                 f"**Min:** {metadata['data_min']:.4f} | "
-                f"**Max:** {metadata['data_max']:.4f} | "
-                f"**Mean:** {metadata['data_mean']:.4f}"
+                f"**Max:** {metadata['data_max']:.4f}"
             )
 
             return pn.Column(
-                pn.pane.Markdown("### Data Visualization"),
-                pn.pane.Markdown(info_text),
-                pn.pane.PNG(buf.getvalue(), width=800)
+                pn.pane.PNG(buf.getvalue(), width=800),
+                pn.pane.Markdown(info_text)
             )
 
         except SyntaxError as e:
             return pn.pane.Alert(
-                f"### Syntax Error in Matplotlib Code\n\n```\n{str(e)}\n```",
+                f"### Syntax Error\n\n```\n{str(e)}\n```",
                 alert_type="danger"
             )
         except Exception as e:
             return pn.pane.Alert(
-                f"### Error Executing Matplotlib Code\n\n```\n{str(e)}\n```",
+                f"### Error\n\n```\n{str(e)}\n```",
                 alert_type="danger"
             )
 
     @pn.depends('visualization_mode', 'current_dataset_key', 'selected_metric_id',
-                'metric_input_bindings', 'x_start', 'x_end', 'y_min', 'y_max',
+                'metric_input_bindings', 'x_start', 'x_end',
                 'downsample_enabled', 'downsample_factor', 'plot_version', 'matplotlib_code')
     def _get_plot_panel(self):
         """
         Create reactive plot visualization.
 
-        Panel Integration Rules:
-        - Depends only on PlotState parameters (no raw arrays)
-        - No recomputing unless state actually changes
-        - No background threads
-        - Raw mode: executes user matplotlib code
-        - Derived mode: uses HoloViews/Datashader if available
+        Raw mode: loads data chunk and executes user matplotlib code.
+        Derived mode: shows stats only (matplotlib support coming).
         """
-        # Branch based on visualization mode
         if self.visualization_mode == "raw":
             if not self.current_dataset_key:
-                return pn.pane.Markdown("### Data Visualization\n\nSelect a dataset to view plot")
+                return pn.pane.Markdown("_Select a dataset to view_")
 
-            # Read data slice based on current state
-            x_vals, y_vals, metadata = self._read_data_slice()
+            # Read data slice (any dimensionality)
+            data, metadata = self._read_data_slice()
+
+            # Handle errors
+            if data is None:
+                if metadata and isinstance(metadata, dict) and 'error' in metadata:
+                    return pn.pane.Alert(f"**Error:** {metadata['error']}", alert_type="danger")
+                return pn.pane.Alert("Error loading data", alert_type="warning")
+
+            # Execute matplotlib code - no dimension restrictions
+            return self._execute_matplotlib_code(data, metadata)
 
         elif self.visualization_mode == "derived":
             if not self.selected_metric_id:
-                return pn.pane.Markdown("### Data Visualization\n\nSelect a metric to compute")
+                return pn.pane.Markdown("_Select a metric to compute_")
 
             if self.metric_validation_status != "":
-                return pn.pane.Alert(
-                    f"### Invalid Metric Configuration\n\n{self.metric_validation_status}",
-                    alert_type="danger"
-                )
+                return pn.pane.Alert(f"**Error:** {self.metric_validation_status}", alert_type="danger")
 
             # Read metric slice
-            x_vals, y_vals, metadata = self._read_metric_slice()
+            _, y_vals, metadata = self._read_metric_slice()
 
-        else:
-            return pn.pane.Markdown("### Data Visualization\n\nUnknown visualization mode")
+            if y_vals is None:
+                if metadata and isinstance(metadata, dict) and 'error' in metadata:
+                    return pn.pane.Alert(f"**Error:** {metadata['error']}", alert_type="danger")
+                return pn.pane.Alert("Error computing metric", alert_type="warning")
 
-        # Handle errors (fail loudly but locally - don't crash app)
-        if x_vals is None or y_vals is None:
-            if metadata and isinstance(metadata, dict) and 'error' in metadata:
-                return pn.pane.Alert(
-                    f"### Visualization Error\n\n{metadata['error']}",
-                    alert_type="danger"
-                )
-            return pn.pane.Alert(
-                "### Data Visualization\n\nError loading data",
-                alert_type="warning"
-            )
-
-        # Handle 2D datasets (explicit edge case)
-        if len(y_vals.shape) == 2:
+            # Derived mode: text stats
             return pn.pane.Markdown(
-                f"### Data Visualization\n\n"
-                f"**2D Dataset:** `{self.current_dataset_key}` - Shape: {y_vals.shape}\n\n"
-                f"2D heatmap visualization coming soon...\n\n"
-                f"**Stats:** Min={metadata['data_min']:.4f}, Max={metadata['data_max']:.4f}"
+                f"**Metric:** `{self.selected_metric_id}`  \n"
+                f"**Range:** [{self.x_start}:{self.x_end}]  \n"
+                f"**Min:** {metadata['data_min']:.4f} | **Max:** {metadata['data_max']:.4f}"
             )
 
-        # Handle multi-dimensional datasets (>2D)
-        if len(y_vals.shape) > 2:
-            return pn.pane.Markdown(
-                f"### Data Visualization\n\n"
-                f"**{len(y_vals.shape)}D Dataset:** `{self.current_dataset_key}`\n\n"
-                f"Only 1D and 2D datasets are supported for visualization."
-            )
-
-        # Raw mode: use matplotlib with user code
-        if self.visualization_mode == "raw":
-            return self._execute_matplotlib_code(x_vals, y_vals, metadata)
-
-        # Derived mode: text-only stats (datashader removed)
-        return pn.pane.Markdown(
-            f"### Data Visualization\n\n"
-            f"**Derived Metric:** `{self.selected_metric_id}`\n\n"
-            f"**Points:** {metadata['num_points']:,}\n\n"
-            f"**Range:** [{self.x_start}:{self.x_end}]\n\n"
-            f"**Min:** {metadata['data_min']:.4f} | "
-            f"**Max:** {metadata['data_max']:.4f} | "
-            f"**Mean:** {metadata['data_mean']:.4f}"
-        )
+        return pn.pane.Markdown("_Unknown mode_")
 
     def _build_ui(self):
         """Build the complete UI layout."""
