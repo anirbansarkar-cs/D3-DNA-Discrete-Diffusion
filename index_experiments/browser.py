@@ -14,6 +14,7 @@ import numpy as np
 sys.path.append(str(Path(__file__).parent))
 from scan_file import scan_file
 from index_experiments import insert_file
+from metrics import MetricRegistry, DerivedMetric
 
 # Try to import Dask (optional dependency)
 try:
@@ -522,6 +523,233 @@ class FileDataState:
         self.close()
 
 
+class MetricDataState:
+    """
+    Manages data access for derived metrics with multiple file sources.
+
+    Responsibilities:
+    - Maintain multiple FileDataState instances (one per unique file)
+    - Resolve metric input bindings to Dask arrays
+    - Apply metric computation function
+    - Validate shapes with broadcasting rules
+
+    Lifecycle:
+    - Created when user switches to derived mode
+    - Updated when metric or bindings change
+    - Closed when switching back to raw mode
+
+    Design:
+    - Plain Python class (not Param)
+    - Mutated only by callbacks
+    - One instance per user session
+    """
+
+    def __init__(self):
+        # Map file_path -> FileDataState
+        self._file_states: dict = {}
+
+        # Current metric being computed
+        self.current_metric = None  # DerivedMetric or None
+
+        # Current bindings: input_key -> (file_path, dataset_key)
+        self.bindings: dict = {}
+
+        # Cached result metadata
+        self.result_shape: Optional[tuple] = None
+        self.result_dtype: Optional[str] = None
+
+    def set_metric_and_bindings(
+        self,
+        metric,  # DerivedMetric
+        bindings: dict,  # input_key -> (file_id, dataset_key)
+        file_id_to_path  # Callable[[int], str]
+    ):
+        """
+        Update metric and bindings, initializing file states as needed.
+
+        Args:
+            metric: DerivedMetric instance
+            bindings: Dict mapping input_key -> (file_id, dataset_key)
+            file_id_to_path: Function to convert file_id to file_path
+        """
+        self.current_metric = metric
+
+        # Convert file_id -> file_path for bindings
+        self.bindings = {
+            input_key: (file_id_to_path(file_id), dataset_key)
+            for input_key, (file_id, dataset_key) in bindings.items()
+        }
+
+        # Initialize FileDataState for each unique file
+        unique_files = set(file_path for file_path, _ in self.bindings.values())
+
+        for file_path in unique_files:
+            if file_path not in self._file_states:
+                self._file_states[file_path] = FileDataState()
+            self._file_states[file_path].set_file(file_path)
+
+    def validate_bindings(self) -> tuple:
+        """
+        Validate current bindings match metric requirements.
+
+        Returns:
+            (is_valid, error_message): Tuple of validation result and error
+
+        Validation steps:
+        1. Check all required inputs are bound
+        2. Open all datasets and get shapes
+        3. Validate shapes with metric's validation function
+        4. Compute expected output shape
+        """
+        if self.current_metric is None:
+            return False, "No metric selected"
+
+        # Check all inputs are bound
+        required_keys = {inp.key for inp in self.current_metric.inputs}
+        bound_keys = set(self.bindings.keys())
+
+        if required_keys != bound_keys:
+            missing = required_keys - bound_keys
+            extra = bound_keys - required_keys
+            msg = []
+            if missing:
+                msg.append(f"Missing bindings: {missing}")
+            if extra:
+                msg.append(f"Extra bindings: {extra}")
+            return False, "; ".join(msg)
+
+        # Open all datasets and get shapes
+        shapes = {}
+        for input_key, (file_path, dataset_key) in self.bindings.items():
+            if file_path not in self._file_states:
+                return False, f"File state not initialized for {file_path}"
+
+            file_state = self._file_states[file_path]
+            file_state.set_dataset(dataset_key)
+
+            if file_state.dataset_shape is None:
+                return False, f"Failed to open '{dataset_key}' from {Path(file_path).name}"
+
+            shapes[input_key] = file_state.dataset_shape
+
+        # Validate shapes with metric's validation function
+        if self.current_metric.validate_shapes_fn:
+            is_valid, error_msg = self.current_metric.validate_shapes_fn(shapes)
+            if not is_valid:
+                return False, error_msg
+
+        # Compute expected output shape
+        try:
+            self.result_shape = self.current_metric.output_shape_fn(shapes)
+        except Exception as e:
+            return False, f"Failed to compute output shape: {str(e)}"
+
+        # Assume dtype of first input (could be made smarter)
+        first_file_path, first_dataset_key = list(self.bindings.values())[0]
+        self.result_dtype = self._file_states[first_file_path].dataset_dtype
+
+        return True, ""
+
+    def get_dask_arrays(self) -> dict:
+        """
+        Get Dask arrays for all metric inputs.
+
+        Returns:
+            Dict mapping input_key -> dask.array.Array
+
+        Raises:
+            ValueError: If dataset cannot be loaded
+        """
+        arrays = {}
+
+        for input_key, (file_path, dataset_key) in self.bindings.items():
+            file_state = self._file_states[file_path]
+            file_state.set_dataset(dataset_key)
+
+            # Use Dask if dataset is large, otherwise wrap numpy in Dask
+            dask_array = file_state.get_dask_array(chunks='primary')
+
+            if dask_array is None:
+                # Small dataset - wrap h5py handle in Dask
+                dataset_handle = file_state.get_dataset_handle()
+                if dataset_handle is not None:
+                    # Read to numpy then wrap in Dask for consistent API
+                    numpy_data = dataset_handle[:]
+                    if DASK_AVAILABLE:
+                        dask_array = da.from_array(numpy_data, chunks='auto')
+                    else:
+                        # Fallback: use numpy directly if Dask not available
+                        dask_array = numpy_data
+
+            if dask_array is None:
+                raise ValueError(f"Failed to load '{dataset_key}' from {Path(file_path).name}")
+
+            arrays[input_key] = dask_array
+
+        return arrays
+
+    def compute_metric_slice(
+        self,
+        x_start: int,
+        x_end: int,
+        downsample_factor: int = 1
+    ) -> tuple:
+        """
+        Compute metric for specified slice.
+
+        Args:
+            x_start: Start index along primary axis
+            x_end: End index along primary axis
+            downsample_factor: Downsampling factor (1 = no downsampling)
+
+        Returns:
+            (x_vals, y_vals): Tuple of x coordinates and metric result
+
+        Raises:
+            ValueError: If metric not set or computation fails
+        """
+        if self.current_metric is None:
+            raise ValueError("No metric set")
+
+        # Get all input arrays as Dask
+        input_arrays = self.get_dask_arrays()
+
+        # Slice all inputs
+        sliced_inputs = {}
+        for key, arr in input_arrays.items():
+            if downsample_factor > 1:
+                sliced_inputs[key] = arr[x_start:x_end:downsample_factor]
+            else:
+                sliced_inputs[key] = arr[x_start:x_end]
+
+        # Apply metric function (returns Dask array)
+        result_dask = self.current_metric.compute_fn(sliced_inputs)
+
+        # Compute to NumPy
+        if DASK_AVAILABLE and hasattr(result_dask, 'compute'):
+            result_numpy = result_dask.compute()
+        else:
+            result_numpy = np.asarray(result_dask)
+
+        # Generate x values
+        if downsample_factor > 1:
+            x_vals = np.arange(x_start, x_end, downsample_factor)
+        else:
+            x_vals = np.arange(x_start, x_end)
+
+        return x_vals, result_numpy
+
+    def close(self):
+        """Close all file handles."""
+        for file_state in self._file_states.values():
+            file_state.close()
+        self._file_states.clear()
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        self.close()
+
+
 # ============================================================================
 # Performance Guardrails & Validation
 # ============================================================================
@@ -695,6 +923,25 @@ class ExperimentBrowser(param.Parameterized):
     # Trigger for plot updates (increment to force recompute)
     plot_version = param.Integer(default=0)
 
+    # Derived metric parameters
+    visualization_mode = param.ObjectSelector(
+        default="raw",
+        objects=["raw", "derived"],
+        doc="Visualization mode: raw dataset or derived metric"
+    )
+    selected_metric_id = param.String(
+        default="",
+        doc="ID of selected derived metric from registry"
+    )
+    metric_input_bindings = param.Dict(
+        default={},
+        doc="Bindings of metric inputs to file datasets: {input_key: (file_id, dataset_key)}"
+    )
+    metric_validation_status = param.String(
+        default="",
+        doc="Error message if metric binding is invalid, empty if valid"
+    )
+
     # Filter parameters
     file_type_filter = param.ObjectSelector(default="All", objects=["All"])
     owner_filter = param.ObjectSelector(default="All", objects=["All"])
@@ -706,6 +953,10 @@ class ExperimentBrowser(param.Parameterized):
 
         # Initialize file data state (not a Param object)
         self.file_data_state = FileDataState()
+
+        # Watch for mode changes - close state when switching modes
+        self.param.watch(self._on_mode_change, 'visualization_mode')
+        self.param.watch(self._on_metric_change, 'selected_metric_id')
 
         # Initialize filter options
         self._update_filter_options()
@@ -743,6 +994,80 @@ class ExperimentBrowser(param.Parameterized):
 
         self.param.file_type_filter.objects = file_types
         self.param.owner_filter.objects = owners
+
+    def _on_mode_change(self, event):
+        """Handle visualization mode changes."""
+        if event.new == "raw":
+            # Switching to raw mode - close metric state
+            if hasattr(self, 'metric_data_state'):
+                self.metric_data_state.close()
+                delattr(self, 'metric_data_state')
+        elif event.new == "derived":
+            # Switching to derived mode - close raw file state
+            self.file_data_state.close()
+
+    def _on_metric_change(self, event):
+        """Handle metric selection changes."""
+        if self.visualization_mode == "derived":
+            # Changing metric - close old state
+            if hasattr(self, 'metric_data_state'):
+                self.metric_data_state.close()
+            # New state will be created on next validation
+
+    def _get_file_options(self) -> dict:
+        """
+        Get file options for dropdowns (filename -> file_id).
+
+        Returns:
+            Dict mapping display names to file IDs
+        """
+        if hasattr(self, '_current_df') and not self._current_df.empty:
+            return {
+                f"{row['filename']} ({row['owner']})": row['id']
+                for _, row in self._current_df.iterrows()
+            }
+        return {}
+
+    def _validate_metric_bindings(self):
+        """Validate current metric bindings and update state."""
+        registry = MetricRegistry.get_instance()
+        metric = registry.get(self.selected_metric_id)
+
+        if not metric:
+            self.metric_validation_status = "Invalid metric selected"
+            return
+
+        # Convert bindings from file_id to file_path
+        def file_id_to_path(file_id: int) -> str:
+            metadata = get_file_metadata(file_id)
+            return metadata['path'] if metadata else ""
+
+        # Initialize or update MetricDataState
+        if not hasattr(self, 'metric_data_state'):
+            self.metric_data_state = MetricDataState()
+
+        try:
+            self.metric_data_state.set_metric_and_bindings(
+                metric,
+                self.metric_input_bindings,
+                file_id_to_path
+            )
+
+            is_valid, error_msg = self.metric_data_state.validate_bindings()
+
+            if is_valid:
+                self.metric_validation_status = ""
+                # Reset plot window to full range
+                if self.metric_data_state.result_shape:
+                    max_dim = int(self.metric_data_state.result_shape[0])
+                    self.x_start = 0
+                    self.x_end = min(max_dim, 1000)
+                    self.plot_version += 1  # Trigger plot update
+            else:
+                self.metric_validation_status = error_msg
+
+        except Exception as e:
+            self.metric_validation_status = f"Error: {str(e)}"
 
     def _get_db_info_pane(self):
         """Create database info panel."""
@@ -1024,26 +1349,158 @@ class ExperimentBrowser(param.Parameterized):
 
         return pn.Column(*panels)
 
-    @pn.depends('current_dataset_key')
-    def _get_plot_controls(self):
-        """Create plot controls panel (only shown when dataset is selected)."""
-        if not self.current_dataset_key:
-            return pn.pane.Markdown("")
-
+    def _get_derived_metric_controls(self):
+        """Create controls for derived metric mode."""
         controls = []
-        controls.append(pn.pane.Markdown("### Plot Controls"))
 
-        # Dataset info
-        if self.file_data_state.dataset_shape:
-            shape_str = " × ".join(str(d) for d in self.file_data_state.dataset_shape)
-            controls.append(pn.pane.Markdown(
-                f"**Selected Dataset:** `{self.current_dataset_key}`  \n"
-                f"**Shape:** {shape_str}  \n"
-                f"**Dtype:** {self.file_data_state.dataset_dtype}"
-            ))
+        # Metric selector dropdown
+        registry = MetricRegistry.get_instance()
+        available_metrics = registry.list_all()
 
-            # X range slider (for first dimension)
-            max_dim = int(self.file_data_state.dataset_shape[0])
+        if not available_metrics:
+            return [pn.pane.Alert(
+                "No metrics available. Register metrics in metrics.py",
+                alert_type="warning"
+            )]
+
+        metric_options = {m.display_name: m.metric_id for m in available_metrics}
+
+        metric_selector = pn.widgets.Select(
+            name="Select Metric",
+            options=metric_options,
+            value=self.selected_metric_id if self.selected_metric_id else None,
+            width=400
+        )
+
+        def on_metric_select(event):
+            self.selected_metric_id = event.new
+            # Reset bindings when metric changes
+            self.metric_input_bindings = {}
+
+        metric_selector.param.watch(on_metric_select, 'value')
+        controls.append(metric_selector)
+
+        # Show metric description
+        if self.selected_metric_id:
+            metric = registry.get(self.selected_metric_id)
+            if metric:
+                controls.append(pn.pane.Markdown(
+                    f"**Description:** {metric.description}"
+                ))
+
+                # Dataset binding UI for each input
+                controls.append(pn.pane.Markdown("#### Input Dataset Bindings"))
+
+                for input_spec in metric.inputs:
+                    controls.append(self._get_input_binding_widget(input_spec))
+
+                # Validation status
+                if self.metric_validation_status:
+                    controls.append(pn.pane.Alert(
+                        f"Validation Error: {self.metric_validation_status}",
+                        alert_type="danger"
+                    ))
+                else:
+                    # Show expected output shape if bindings are valid
+                    if hasattr(self, 'metric_data_state') and self.metric_data_state.result_shape:
+                        shape_str = " × ".join(str(d) for d in self.metric_data_state.result_shape)
+                        controls.append(pn.pane.Alert(
+                            f"✓ Valid bindings. Output shape: {shape_str}",
+                            alert_type="success"
+                        ))
+
+                # Plot controls (x-range, downsample) - similar to raw mode
+                if self.metric_validation_status == "" and hasattr(self, 'metric_data_state'):
+                    controls.append(pn.pane.Markdown("#### Plot Controls"))
+                    controls.extend(self._get_metric_plot_controls())
+
+        return controls
+
+    def _get_input_binding_widget(self, input_spec):
+        """
+        Create widget for binding a metric input to a dataset.
+
+        Args:
+            input_spec: MetricInputSpec defining the input
+
+        Returns:
+            Panel Row with file and dataset selectors
+        """
+        # Get current binding if exists
+        current_binding = self.metric_input_bindings.get(input_spec.key)
+        current_file_id = current_binding[0] if current_binding else None
+        current_dataset_key = current_binding[1] if current_binding else None
+
+        # File selector (from already-indexed files)
+        file_options = self._get_file_options()
+
+        file_select = pn.widgets.Select(
+            name=f"{input_spec.name} - File",
+            options=file_options,
+            value=current_file_id,
+            width=350
+        )
+
+        # Dataset selector (updates based on file selection)
+        dataset_options = {}
+        if current_file_id:
+            datasets_df = get_file_datasets(current_file_id)
+            if not datasets_df.empty:
+                dataset_options = {
+                    f"{row['key']} [{row['shape']}]": row['key']
+                    for _, row in datasets_df.iterrows()
+                }
+
+        dataset_select = pn.widgets.Select(
+            name=f"{input_spec.name} - Dataset",
+            options=dataset_options,
+            value=current_dataset_key,
+            width=350
+        )
+
+        # Callback: When file changes, update dataset options
+        def on_file_change(event):
+            new_file_id = event.new
+            if new_file_id:
+                datasets_df = get_file_datasets(new_file_id)
+                if not datasets_df.empty:
+                    new_options = {
+                        f"{row['key']} [{row['shape']}]": row['key']
+                        for _, row in datasets_df.iterrows()
+                    }
+                    dataset_select.options = new_options
+                else:
+                    dataset_select.options = {}
+            else:
+                dataset_select.options = {}
+
+        file_select.param.watch(on_file_change, 'value')
+
+        # Callback: When dataset changes, update binding
+        def on_dataset_change(event):
+            file_id = file_select.value
+            dataset_key = event.new
+
+            if file_id and dataset_key:
+                # Update bindings
+                new_bindings = self.metric_input_bindings.copy()
+                new_bindings[input_spec.key] = (file_id, dataset_key)
+                self.metric_input_bindings = new_bindings
+
+                # Trigger validation
+                self._validate_metric_bindings()
+
+        dataset_select.param.watch(on_dataset_change, 'value')
+
+        return pn.Row(file_select, dataset_select)
+
+    def _get_metric_plot_controls(self):
+        """Plot controls for derived metrics (x-range, downsample)."""
+        controls = []
+
+        # Similar to raw mode controls
+        if self.metric_data_state.result_shape:
+            max_dim = int(self.metric_data_state.result_shape[0])
 
             x_range_slider = pn.widgets.RangeSlider(
                 name="X Range",
@@ -1056,20 +1513,17 @@ class ExperimentBrowser(param.Parameterized):
 
             def update_x_range(event):
                 self.x_start, self.x_end = int(event.new[0]), int(event.new[1])
-                # State is automatically updated via reactive parameters
-                # No need to call set_slice_params - we read directly from dataset handle
 
             x_range_slider.param.watch(update_x_range, 'value')
             controls.append(x_range_slider)
 
-            # Downsampling toggle
+            # Downsampling controls
             downsample_checkbox = pn.widgets.Checkbox.from_param(
                 self.param.downsample_enabled,
                 name="Enable Downsampling"
             )
             controls.append(downsample_checkbox)
 
-            # Downsampling factor (only show if enabled)
             if self.downsample_enabled:
                 downsample_slider = pn.widgets.IntSlider.from_param(
                     self.param.downsample_factor,
@@ -1077,6 +1531,81 @@ class ExperimentBrowser(param.Parameterized):
                     width=400
                 )
                 controls.append(downsample_slider)
+
+        return controls
+
+    @pn.depends('current_dataset_key', 'visualization_mode', 'selected_metric_id')
+    def _get_plot_controls(self):
+        """Create plot controls panel."""
+        controls = []
+        controls.append(pn.pane.Markdown("### Visualization Mode"))
+
+        # Mode selector radio buttons
+        mode_selector = pn.widgets.RadioButtonGroup.from_param(
+            self.param.visualization_mode,
+            options=["raw", "derived"],
+            button_type="primary",
+            name="Mode"
+        )
+        controls.append(mode_selector)
+        controls.append(pn.layout.Divider())
+
+        # Branch based on mode
+        if self.visualization_mode == "raw":
+            # Existing raw dataset controls
+            if not self.current_dataset_key:
+                return pn.pane.Markdown("")
+
+            controls.append(pn.pane.Markdown("### Plot Controls"))
+
+            # Dataset info
+            if self.file_data_state.dataset_shape:
+                shape_str = " × ".join(str(d) for d in self.file_data_state.dataset_shape)
+                controls.append(pn.pane.Markdown(
+                    f"**Selected Dataset:** `{self.current_dataset_key}`  \n"
+                    f"**Shape:** {shape_str}  \n"
+                    f"**Dtype:** {self.file_data_state.dataset_dtype}"
+                ))
+
+                # X range slider (for first dimension)
+                max_dim = int(self.file_data_state.dataset_shape[0])
+
+                x_range_slider = pn.widgets.RangeSlider(
+                    name="X Range",
+                    start=0,
+                    end=max_dim,
+                    value=(self.x_start, self.x_end),
+                    step=1,
+                    width=400
+                )
+
+                def update_x_range(event):
+                    self.x_start, self.x_end = int(event.new[0]), int(event.new[1])
+                    # State is automatically updated via reactive parameters
+                    # No need to call set_slice_params - we read directly from dataset handle
+
+                x_range_slider.param.watch(update_x_range, 'value')
+                controls.append(x_range_slider)
+
+                # Downsampling toggle
+                downsample_checkbox = pn.widgets.Checkbox.from_param(
+                    self.param.downsample_enabled,
+                    name="Enable Downsampling"
+                )
+                controls.append(downsample_checkbox)
+
+                # Downsampling factor (only show if enabled)
+                if self.downsample_enabled:
+                    downsample_slider = pn.widgets.IntSlider.from_param(
+                        self.param.downsample_factor,
+                        name="Downsample Factor",
+                        width=400
+                    )
+                    controls.append(downsample_slider)
+
+        else:  # derived mode
+            # Derived metric controls
+            controls.extend(self._get_derived_metric_controls())
 
         return pn.Column(*controls)
 
@@ -1176,7 +1705,68 @@ class ExperimentBrowser(param.Parameterized):
             print(f"Error reading data slice: {e}")
             return None, None, {"error": f"Unexpected error: {str(e)}"}
 
-    @pn.depends('current_dataset_key', 'x_start', 'x_end', 'y_min', 'y_max',
+    def _read_metric_slice(self):
+        """
+        Compute metric slice based on current parameters.
+
+        Mirrors _read_data_slice() but for derived metrics.
+
+        Returns:
+            (x_vals, y_vals, metadata_dict) or (None, None, error_dict)
+        """
+        if not hasattr(self, 'metric_data_state'):
+            return None, None, {"error": "Metric state not initialized"}
+
+        if self.metric_validation_status != "":
+            return None, None, {"error": self.metric_validation_status}
+
+        try:
+            # Apply performance guardrail: enforce minimum zoom window
+            total_size = int(self.metric_data_state.result_shape[0]) if self.metric_data_state.result_shape else 0
+            if total_size == 0:
+                return None, None, {"error": "Metric result has zero size"}
+
+            x_start, x_end = enforce_minimum_zoom(self.x_start, self.x_end, total_size)
+
+            # Update parameters if adjusted
+            if x_start != self.x_start or x_end != self.x_end:
+                self.x_start = x_start
+                self.x_end = x_end
+
+            # Compute metric slice
+            downsample = self.downsample_factor if self.downsample_enabled else 1
+            x_vals, y_vals = self.metric_data_state.compute_metric_slice(
+                x_start, x_end, downsample
+            )
+
+            # Validate data before plotting
+            is_valid, error_msg = validate_dataset_for_plotting(y_vals, "metric_result")
+            if not is_valid:
+                return None, None, {"error": error_msg}
+
+            # Compute metadata
+            valid_data = y_vals[np.isfinite(y_vals)]
+            if len(valid_data) == 0:
+                return None, None, {"error": "Metric result contains no finite values"}
+
+            metadata = {
+                'source': f"Derived metric: {self.selected_metric_id}",
+                'size_mb': 0,  # Not applicable for derived metrics
+                'num_points': len(y_vals),
+                'num_valid': len(valid_data),
+                'data_min': float(valid_data.min()),
+                'data_max': float(valid_data.max()),
+                'data_mean': float(valid_data.mean())
+            }
+
+            return x_vals, y_vals, metadata
+
+        except Exception as e:
+            print(f"Error computing metric slice: {e}")
+            return None, None, {"error": f"Metric computation error: {str(e)}"}
+
+    @pn.depends('visualization_mode', 'current_dataset_key', 'selected_metric_id',
+                'metric_input_bindings', 'x_start', 'x_end', 'y_min', 'y_max',
                 'downsample_enabled', 'downsample_factor', 'plot_version')
     def _get_plot_panel(self):
         """
@@ -1186,13 +1776,31 @@ class ExperimentBrowser(param.Parameterized):
         - Depends only on PlotState parameters (no raw arrays)
         - No recomputing unless state actually changes
         - No background threads
-        - Reads from FileDataState, calls Datashader, returns image
+        - Reads from FileDataState/MetricDataState, calls Datashader, returns image
         """
-        if not self.current_dataset_key:
-            return pn.pane.Markdown("### Data Visualization\n\nSelect a dataset to view plot")
+        # Branch based on visualization mode
+        if self.visualization_mode == "raw":
+            if not self.current_dataset_key:
+                return pn.pane.Markdown("### Data Visualization\n\nSelect a dataset to view plot")
 
-        # Read data slice based on current state
-        x_vals, y_vals, metadata = self._read_data_slice()
+            # Read data slice based on current state
+            x_vals, y_vals, metadata = self._read_data_slice()
+
+        elif self.visualization_mode == "derived":
+            if not self.selected_metric_id:
+                return pn.pane.Markdown("### Data Visualization\n\nSelect a metric to compute")
+
+            if self.metric_validation_status != "":
+                return pn.pane.Alert(
+                    f"### Invalid Metric Configuration\n\n{self.metric_validation_status}",
+                    alert_type="danger"
+                )
+
+            # Read metric slice
+            x_vals, y_vals, metadata = self._read_metric_slice()
+
+        else:
+            return pn.pane.Markdown("### Data Visualization\n\nUnknown visualization mode")
 
         # Handle errors (fail loudly but locally - don't crash app)
         if x_vals is None or y_vals is None:
