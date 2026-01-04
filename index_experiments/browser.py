@@ -4,9 +4,11 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Any
 import shutil
 import sys
+import h5py
+import numpy as np
 
 # Add index_experiments directory to path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -17,7 +19,7 @@ from index_experiments import insert_file
 DB_PATH = str(Path(__file__).parent / "experiments.db")
 
 # Initialize Panel extension
-pn.extension('tabulator')
+pn.extension('tabulator', 'plotly')
 
 # ============================================================================
 # Database Query Functions
@@ -246,6 +248,156 @@ def format_timestamp(timestamp: float) -> str:
 
 
 # ============================================================================
+# File Data State Management
+# ============================================================================
+
+class FileDataState:
+    """
+    State manager for HDF5/NPZ file data access.
+
+    Responsibilities:
+    - Current file path
+    - Current dataset key
+    - Current slicing window
+    - Cached file handle
+    - Cached dataset handle
+    - Cached data arrays
+
+    Design:
+    - Plain Python class (not Param)
+    - One instance per user session
+    - Mutated only by callbacks
+
+    Benefits:
+    - Prevents repeated file opens
+    - Prevents recomputation on every widget change
+    - Keeps latency predictable
+    """
+
+    def __init__(self):
+        self.file_path: Optional[str] = None
+        self.dataset_key: Optional[str] = None
+
+        # Slicing parameters
+        self.slice_params: dict = {}
+
+        # Cached handles
+        self._file_handle: Optional[h5py.File] = None
+        self._dataset_handle: Optional[Any] = None
+        self._cached_data: Optional[np.ndarray] = None
+
+        # Dataset metadata
+        self.dataset_shape: Optional[tuple] = None
+        self.dataset_dtype: Optional[str] = None
+
+    def set_file(self, file_path: str):
+        """Set the current file, closing any previous file."""
+        if file_path == self.file_path:
+            return  # No change
+
+        self.close()
+        self.file_path = file_path
+        self.dataset_key = None
+        self._cached_data = None
+        self.dataset_shape = None
+        self.dataset_dtype = None
+
+    def set_dataset(self, dataset_key: str):
+        """Set the current dataset key."""
+        if dataset_key == self.dataset_key and self.file_path:
+            return  # No change
+
+        self.dataset_key = dataset_key
+        self._dataset_handle = None
+        self._cached_data = None
+
+        # Open file if needed and get dataset metadata
+        if self.file_path and dataset_key:
+            try:
+                file_ext = Path(self.file_path).suffix.lower()
+
+                if file_ext in ['.h5', '.hdf5']:
+                    if self._file_handle is None:
+                        self._file_handle = h5py.File(self.file_path, 'r')
+
+                    if dataset_key in self._file_handle:
+                        self._dataset_handle = self._file_handle[dataset_key]
+                        self.dataset_shape = self._dataset_handle.shape
+                        self.dataset_dtype = str(self._dataset_handle.dtype)
+
+                elif file_ext == '.npz':
+                    # NPZ files need to be loaded fresh each time
+                    data = np.load(self.file_path, allow_pickle=False)
+                    if dataset_key in data.files:
+                        self._cached_data = data[dataset_key]
+                        self.dataset_shape = self._cached_data.shape
+                        self.dataset_dtype = str(self._cached_data.dtype)
+
+            except Exception as e:
+                print(f"Error opening dataset: {e}")
+                self.dataset_shape = None
+                self.dataset_dtype = None
+
+    def set_slice_params(self, **params):
+        """Set slicing parameters."""
+        self.slice_params = params
+        self._cached_data = None  # Invalidate cache
+
+    def get_data_slice(self) -> Optional[np.ndarray]:
+        """
+        Get the current data slice based on slicing parameters.
+        Returns cached data if parameters haven't changed.
+        """
+        if self._dataset_handle is None and self._cached_data is None:
+            return None
+
+        try:
+            # Build slice objects from parameters
+            if not self.slice_params or not self.dataset_shape:
+                # No slicing - return full dataset (or cached)
+                if self._cached_data is not None:
+                    return self._cached_data
+                elif self._dataset_handle is not None:
+                    # Load full dataset (be careful with large files!)
+                    self._cached_data = self._dataset_handle[...]
+                    return self._cached_data
+            else:
+                # Build slice from parameters
+                slices = []
+                for dim in range(len(self.dataset_shape)):
+                    start = self.slice_params.get(f'dim{dim}_start', 0)
+                    end = self.slice_params.get(f'dim{dim}_end', self.dataset_shape[dim])
+                    slices.append(slice(start, end))
+
+                if self._cached_data is not None:
+                    # Slice cached data
+                    return self._cached_data[tuple(slices)]
+                elif self._dataset_handle is not None:
+                    # Slice dataset directly
+                    return self._dataset_handle[tuple(slices)]
+
+        except Exception as e:
+            print(f"Error getting data slice: {e}")
+            return None
+
+    def close(self):
+        """Close any open file handles."""
+        if self._file_handle is not None:
+            try:
+                self._file_handle.close()
+            except:
+                pass
+            self._file_handle = None
+
+        self._dataset_handle = None
+        self._cached_data = None
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        self.close()
+
+
+# ============================================================================
 # Panel Application
 # ============================================================================
 
@@ -264,6 +416,9 @@ class ExperimentBrowser(param.Parameterized):
 
     def __init__(self, **params):
         super().__init__(**params)
+
+        # Initialize file data state (not a Param object)
+        self.file_data_state = FileDataState()
 
         # Initialize filter options
         self._update_filter_options()
@@ -403,7 +558,7 @@ class ExperimentBrowser(param.Parameterized):
                     pn.Row(
                         pn.Column(
                             pn.pane.Markdown("**Path:**"),
-                            pn.pane.Code(metadata['path'], language=None),
+                            pn.pane.Markdown(f"`{metadata['path']}`"),
                             pn.pane.Markdown("**Type:**"),
                             pn.pane.Markdown(metadata['file_type'])
                         ),
