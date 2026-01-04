@@ -41,7 +41,7 @@ MIN_ZOOM_WINDOW = 10           # Minimum number of points in zoom window
 MIN_ZOOM_WINDOW_RATIO = 0.001  # Minimum zoom as fraction of total range
 
 # Initialize Panel extension
-pn.extension('tabulator', 'ace')
+pn.extension('tabulator')
 
 # ============================================================================
 # Database Query Functions
@@ -1226,11 +1226,10 @@ class ExperimentBrowser(param.Parameterized):
         vars_hint = ", ".join([f"`{v}`" for v in var_names])
         controls.append(pn.pane.Markdown(f"**Code** _(vars: {vars_hint}, `plt`, `np`)_"))
 
-        # Use Ace editor for better code editing with tab support
-        code_editor = pn.widgets.Ace(
+        # Code editor (TextAreaInput - tab inserts spaces via JS workaround if needed)
+        code_editor = pn.widgets.TextAreaInput(
             value=self.matplotlib_code,
-            language='python',
-            theme='monokai',
+            placeholder="# Enter matplotlib code here\n# Available: plt, np, and your selected datasets",
             height=200,
             sizing_mode='stretch_width'
         )
