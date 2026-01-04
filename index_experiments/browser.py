@@ -833,6 +833,7 @@ class ExperimentBrowser(param.Parameterized):
     # Plot control parameters
     x_start = param.Integer(default=0)
     x_end = param.Integer(default=100)
+    chunk_dim = param.Integer(default=0, bounds=(0, 10), doc="Dimension to chunk along")
 
     # Trigger for plot updates (increment to force recompute)
     plot_version = param.Integer(default=0)
@@ -1263,7 +1264,7 @@ class ExperimentBrowser(param.Parameterized):
 
         return pn.Column(*panels)
 
-    @pn.depends('selected_datasets', 'x_start', 'x_end')
+    @pn.depends('selected_datasets', 'x_start', 'x_end', 'chunk_dim')
     def _get_shape_info(self):
         """Get shape information display for chunked datasets."""
         shapes = self._get_chunked_shapes()
@@ -1275,7 +1276,7 @@ class ExperimentBrowser(param.Parameterized):
             )
         return pn.pane.Markdown("")
 
-    @pn.depends('selected_datasets', 'matplotlib_code')
+    @pn.depends('selected_datasets')
     def _get_plot_controls(self):
         """Create unified Plot panel with controls and code editor."""
         controls = []
@@ -1284,17 +1285,41 @@ class ExperimentBrowser(param.Parameterized):
             controls.append(pn.pane.Markdown("_Select datasets from files to plot_", styles={'color': '#888', 'font-style': 'italic'}))
             return pn.Column(*controls)
 
-        # Build var_names for code hints and find max dataset size
+        # Build var_names for code hints and find max dimensions
         var_names = []
-        max_size = 100  # default
+        max_dims = 1
+        shapes_list = []
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
             var_name = make_var_name(filename_stem, dataset_key)
             var_names.append(var_name)
-            # Get shape to determine max size
             shape = self._get_full_shape(file_path, dataset_key)
-            if shape and len(shape) > 0:
-                max_size = max(max_size, shape[0])
+            if shape:
+                shapes_list.append(shape)
+                max_dims = max(max_dims, len(shape))
+
+        # Dimension selector
+        dim_options = list(range(max_dims))
+        current_dim = min(self.chunk_dim, max_dims - 1)
+
+        dim_selector = pn.widgets.Select(
+            name="",
+            options=dim_options,
+            value=current_dim,
+            width=50
+        )
+
+        def update_dim(event):
+            self.chunk_dim = event.new
+            self.plot_version += 1
+
+        dim_selector.param.watch(update_dim, 'value')
+
+        # Get max size for selected dimension
+        max_size = 100
+        for shape in shapes_list:
+            if len(shape) > current_dim:
+                max_size = max(max_size, shape[current_dim])
 
         # Clamp current values to valid range
         x_start = min(self.x_start, max_size)
@@ -1326,7 +1351,9 @@ class ExperimentBrowser(param.Parameterized):
         )
 
         controls.append(pn.Row(
-            pn.pane.Markdown("**Range:**", styles={'margin-right': '5px', 'white-space': 'nowrap', 'font-size': '12px'}),
+            pn.pane.Markdown("**Dim:**", styles={'margin-right': '3px', 'white-space': 'nowrap', 'font-size': '12px'}),
+            dim_selector,
+            pn.pane.Markdown("**Range:**", styles={'margin': '0 5px', 'white-space': 'nowrap', 'font-size': '12px'}),
             chunk_slider,
             range_info,
             align='center',
@@ -1409,6 +1436,8 @@ class ExperimentBrowser(param.Parameterized):
             dict mapping var_name to shape tuple, or None if error
         """
         shapes = {}
+        dim = self.chunk_dim
+
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
             var_name = make_var_name(filename_stem, dataset_key)
@@ -1417,17 +1446,17 @@ class ExperimentBrowser(param.Parameterized):
             if full_shape is None:
                 return None
 
-            total_size = full_shape[0] if full_shape else 0
+            # Use chunk_dim, defaulting to 0 if dim exceeds shape
+            effective_dim = min(dim, len(full_shape) - 1)
+            total_size = full_shape[effective_dim] if full_shape else 0
             x_start = min(self.x_start, total_size)
             x_end = min(self.x_end, total_size)
             chunked_len = x_end - x_start
 
-            if len(full_shape) == 1:
-                chunked_shape = (chunked_len,)
-            else:
-                chunked_shape = (chunked_len,) + full_shape[1:]
-
-            shapes[var_name] = chunked_shape
+            # Build chunked shape with the chunked dimension replaced
+            chunked_shape = list(full_shape)
+            chunked_shape[effective_dim] = chunked_len
+            shapes[var_name] = tuple(chunked_shape)
 
         return shapes
 
@@ -1439,6 +1468,7 @@ class ExperimentBrowser(param.Parameterized):
             (datasets_dict, error_msg) - dict maps var_name to numpy array
         """
         datasets = {}
+        dim = self.chunk_dim
 
         for file_path, dataset_key in self.selected_datasets:
             try:
@@ -1452,12 +1482,19 @@ class ExperimentBrowser(param.Parameterized):
 
                     ds = f[dataset_key]
                     shape = ds.shape
-                    total_size = shape[0] if shape else 0
 
-                    # Apply chunking along dim 0
+                    # Use chunk_dim, defaulting to 0 if dim exceeds shape
+                    effective_dim = min(dim, len(shape) - 1)
+                    total_size = shape[effective_dim] if shape else 0
+
+                    # Apply chunking along selected dimension
                     x_start = min(self.x_start, total_size)
                     x_end = min(self.x_end, total_size)
-                    data = ds[x_start:x_end]
+
+                    # Build slice tuple for the selected dimension
+                    slices = [slice(None)] * len(shape)
+                    slices[effective_dim] = slice(x_start, x_end)
+                    data = ds[tuple(slices)]
 
                     datasets[var_name] = np.asarray(data)
 
@@ -1489,6 +1526,11 @@ class ExperimentBrowser(param.Parameterized):
             # Collected figures from plt.show() calls
             captured_figures = []
 
+            # Capture stdout for print statements
+            import sys
+            from io import StringIO
+            stdout_capture = StringIO()
+
             # Custom show function that captures the current figure
             def custom_show():
                 fig = plt.gcf()
@@ -1507,16 +1549,22 @@ class ExperimentBrowser(param.Parameterized):
             for var_name, data in datasets_dict.items():
                 exec_globals[var_name] = data
 
-            # Temporarily replace plt.show with our custom version
+            # Temporarily replace plt.show and stdout
             original_show = plt.show
+            original_stdout = sys.stdout
             plt.show = custom_show
+            sys.stdout = stdout_capture
 
             try:
                 # Execute user code
                 exec(self.matplotlib_code, exec_globals)
             finally:
-                # Restore original plt.show
+                # Restore original plt.show and stdout
                 plt.show = original_show
+                sys.stdout = original_stdout
+
+            # Get captured print output
+            print_output = stdout_capture.getvalue()
 
             # Also capture any remaining figure that wasn't show()'d
             remaining_fig = plt.gcf()
@@ -1531,39 +1579,52 @@ class ExperimentBrowser(param.Parameterized):
                     if fig.get_axes():
                         captured_figures.append(fig)
 
-            if not captured_figures:
-                return pn.pane.Markdown("_No figure created. Call plt.figure() or plt.plot()_", styles={'color': '#888', 'font-style': 'italic'})
+            # Build output panes
+            output_panes = []
 
-            figure_panes = []
+            # Add figures if any
+            if captured_figures:
+                figure_panes = []
+                for i, fig in enumerate(captured_figures):
+                    buf = BytesIO()
+                    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                    buf.seek(0)
+                    png_data = buf.getvalue()
 
-            for i, fig in enumerate(captured_figures):
-                buf = BytesIO()
-                fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-                buf.seek(0)
-                png_data = buf.getvalue()
+                    # Each figure as PNG with label
+                    if len(captured_figures) > 1:
+                        label = pn.pane.Markdown(f"**Fig {i + 1}**", styles={'font-size': '11px', 'margin': '0'})
+                        fig_pane = pn.Column(label, pn.pane.PNG(png_data), margin=(0, 15, 0, 0))
+                    else:
+                        fig_pane = pn.pane.PNG(png_data)
+                    figure_panes.append(fig_pane)
 
-                # Each figure as PNG with label
+                plt.close('all')
+
+                # Horizontal scrollable container for multiple figures
                 if len(captured_figures) > 1:
-                    label = pn.pane.Markdown(f"**Fig {i + 1}**", styles={'font-size': '11px', 'margin': '0'})
-                    fig_pane = pn.Column(label, pn.pane.PNG(png_data), margin=(0, 15, 0, 0))
+                    output_panes.append(pn.Row(*figure_panes, scroll=True, sizing_mode='stretch_width'))
                 else:
-                    fig_pane = pn.pane.PNG(png_data)
-                figure_panes.append(fig_pane)
+                    output_panes.append(figure_panes[0])
 
-            plt.close('all')
+            # Add print output if any
+            if print_output.strip():
+                output_panes.append(pn.pane.Markdown(
+                    f"```\n{print_output}\n```",
+                    styles={'font-size': '11px', 'margin-top': '10px', 'background': '#f5f5f5', 'padding': '8px', 'border-radius': '4px'}
+                ))
 
-            # Horizontal scrollable container
-            if len(captured_figures) > 1:
-                return pn.Row(*figure_panes, scroll=True, sizing_mode='stretch_width')
-            else:
-                return pn.Column(*figure_panes, sizing_mode='stretch_width')
+            if not output_panes:
+                return pn.pane.Markdown("_No output. Add plt.plot() or print() statements._", styles={'color': '#888', 'font-style': 'italic'})
+
+            return pn.Column(*output_panes, sizing_mode='stretch_width')
 
         except SyntaxError as e:
             return pn.pane.Alert(f"**Syntax Error:** {str(e)}", alert_type="danger")
         except Exception as e:
             return pn.pane.Alert(f"**Error:** {str(e)}", alert_type="danger")
 
-    @pn.depends('selected_datasets', 'x_start', 'x_end', 'plot_version')
+    @pn.depends('selected_datasets', 'x_start', 'x_end', 'chunk_dim', 'plot_version')
     def _get_plot_panel(self):
         """Create plot visualization from selected datasets."""
         if not self.selected_datasets:
