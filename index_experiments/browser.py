@@ -1206,6 +1206,18 @@ class ExperimentBrowser(param.Parameterized):
 
         return pn.Column(*panels)
 
+    @pn.depends('selected_datasets', 'x_start', 'x_end', 'downsample_enabled', 'downsample_factor')
+    def _get_shape_info(self):
+        """Get shape information display for chunked datasets."""
+        shapes = self._get_chunked_shapes()
+        if shapes:
+            shape_parts = [f"`{var}`: {shape}" for var, shape in shapes.items()]
+            return pn.pane.Markdown(
+                "**Shapes:** " + " | ".join(shape_parts),
+                styles={'font-size': '11px', 'color': '#666'}
+            )
+        return pn.pane.Markdown("")
+
     @pn.depends('selected_datasets', 'matplotlib_code', 'downsample_enabled')
     def _get_plot_controls(self):
         """Create unified Plot panel with controls and code editor."""
@@ -1246,18 +1258,7 @@ class ExperimentBrowser(param.Parameterized):
         controls.append(chunk_slider)
         
         # Show chunked shapes
-        @pn.depends('selected_datasets', 'x_start', 'x_end', 'downsample_enabled', 'downsample_factor')
-        def _get_shape_info():
-            shapes = self._get_chunked_shapes()
-            if shapes:
-                shape_parts = [f"`{var}`: {shape}" for var, shape in shapes.items()]
-                return pn.pane.Markdown(
-                    "**Shapes:** " + " | ".join(shape_parts),
-                    styles={'font-size': '11px', 'color': '#666'}
-                )
-            return pn.pane.Markdown("")
-        
-        controls.append(_get_shape_info)
+        controls.append(self._get_shape_info)
 
         # Downsampling
         controls.append(pn.Row(
