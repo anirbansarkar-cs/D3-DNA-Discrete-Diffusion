@@ -964,34 +964,57 @@ class ExperimentBrowser(param.Parameterized):
                 # Replace with message
                 self.file_tabulator = pn.pane.Markdown("No files match the current filters.")
 
+    def _remove_datasets_for_unselected_files(self, new_file_ids):
+        """Remove datasets from files that are no longer in the selection."""
+        if not new_file_ids:
+            # If no files selected, remove all datasets
+            if self.selected_datasets:
+                self.selected_datasets = []
+                self.plot_version += 1
+            return
+        
+        # Get file paths for currently selected files
+        selected_file_paths = set()
+        for file_id in new_file_ids:
+            metadata = get_file_metadata(file_id)
+            if metadata:
+                selected_file_paths.add(metadata['path'])
+        
+        # Remove datasets from files that are no longer selected
+        updated_datasets = [
+            (fp, dk) for fp, dk in self.selected_datasets 
+            if fp in selected_file_paths
+        ]
+        
+        if len(updated_datasets) != len(self.selected_datasets):
+            self.selected_datasets = updated_datasets
+            self.plot_version += 1
+
     def _on_selection_change(self, event):
         """Handle file selection changes."""
         if hasattr(self, '_current_df') and not self._current_df.empty:
             selected_indices = event.new
             if selected_indices:
-                self.selected_file_ids = [int(self._current_df.iloc[idx]['id']) for idx in selected_indices]
+                new_selection = [int(self._current_df.iloc[idx]['id']) for idx in selected_indices]
             else:
-                self.selected_file_ids = []
+                new_selection = []
+            
+            # Remove datasets from unselected files
+            self._remove_datasets_for_unselected_files(new_selection)
+            
+            # Update selected_file_ids
+            self.selected_file_ids = new_selection
 
     def _remove_file_from_selection(self, file_id):
         """Remove a file from the selection and unselect its datasets."""
         if file_id in self.selected_file_ids:
-            # Get file path before removing from selection
-            metadata = get_file_metadata(file_id)
-            file_path = metadata['path'] if metadata else None
-            
             new_selection = [fid for fid in self.selected_file_ids if fid != file_id]
-            self.selected_file_ids = new_selection
             
-            # Remove all datasets from this file from selected_datasets
-            if file_path:
-                updated_datasets = [
-                    (fp, dk) for fp, dk in self.selected_datasets 
-                    if fp != file_path
-                ]
-                if len(updated_datasets) != len(self.selected_datasets):
-                    self.selected_datasets = updated_datasets
-                    self.plot_version += 1
+            # Remove datasets from unselected files
+            self._remove_datasets_for_unselected_files(new_selection)
+            
+            # Update selected_file_ids
+            self.selected_file_ids = new_selection
             
             # Also update the tabulator selection if possible
             if hasattr(self, 'file_tabulator') and self.file_tabulator is not None:
