@@ -1060,28 +1060,29 @@ class ExperimentBrowser(param.Parameterized):
                 file_path = metadata['path']
                 filename = Path(file_path).name
                 file_size = format_file_size(metadata['size'])
-                owner = metadata['owner'] or "?"
-                file_type = metadata['file_type']
 
                 # Create remove button for this file
-                remove_btn = pn.widgets.Button(name="✕", button_type="light", width=30, height=25)
+                remove_btn = pn.widgets.Button(name="✕", button_type="light", width=25, height=22)
                 def make_remove_callback(fid):
                     def callback(_event):
                         self._remove_file_from_selection(fid)
                     return callback
                 remove_btn.on_click(make_remove_callback(file_id))
 
-                # Compact header
-                info_text = f"**{filename}** | {file_size} | {owner} | {file_type}"
+                # Compact header with filename and remove button
                 header_row = pn.Row(
-                    pn.pane.Markdown(info_text),
+                    pn.pane.Markdown(f"**{filename}**", styles={'font-size': '12px', 'margin': '0'}),
+                    pn.Spacer(width=5),
+                    pn.pane.Markdown(f"_{file_size}_", styles={'font-size': '10px', 'color': '#666', 'margin': '0'}),
+                    pn.Spacer(),
                     remove_btn,
-                    align='center'
+                    align='center',
+                    sizing_mode='stretch_width'
                 )
+                panels.append(header_row)
 
                 # Datasets - create checkboxes for selection
                 datasets_df = get_file_datasets(file_id)
-                dataset_widgets = []
 
                 if not datasets_df.empty:
                     for _, row in datasets_df.iterrows():
@@ -1092,11 +1093,12 @@ class ExperimentBrowser(param.Parameterized):
                         # Check if this dataset is already selected
                         is_selected = (file_path, dataset_key) in self.selected_datasets
 
-                        # Create checkbox
+                        # Create compact checkbox
                         cb = pn.widgets.Checkbox(
-                            name=f"`{dataset_key}` {shape_str} {dtype_str}",
+                            name=f"{dataset_key} {shape_str}",
                             value=is_selected,
-                            width=400
+                            styles={'font-size': '11px'},
+                            margin=(2, 0, 2, 15)
                         )
 
                         # Callback to add/remove from selected_datasets
@@ -1104,10 +1106,10 @@ class ExperimentBrowser(param.Parameterized):
                             def callback(event):
                                 entry = (fp, dk)
                                 current = list(self.selected_datasets)
-                                if event.new:  # checked
+                                if event.new:
                                     if entry not in current:
                                         current.append(entry)
-                                else:  # unchecked
+                                else:
                                     if entry in current:
                                         current.remove(entry)
                                 self.selected_datasets = current
@@ -1115,25 +1117,19 @@ class ExperimentBrowser(param.Parameterized):
                             return callback
 
                         cb.param.watch(make_toggle_callback(file_path, dataset_key), 'value')
-                        dataset_widgets.append(cb)
+                        panels.append(cb)
                 else:
-                    dataset_widgets.append(pn.pane.Markdown("_No datasets_"))
+                    panels.append(pn.pane.Markdown("_No datasets_", styles={'margin-left': '15px', 'font-size': '11px'}))
 
-                # File card with border
-                file_card = pn.Card(
-                    pn.pane.Markdown(f"_{file_path}_", styles={'font-size': '10px'}),
-                    *dataset_widgets,
-                    header=header_row,
-                    collapsed=False,
-                    sizing_mode='stretch_width',
-                    styles={'border': '1px solid #ddd', 'margin-bottom': '10px'}
-                )
-                panels.append(file_card)
+                # Add subtle separator between files
+                if file_id != self.selected_file_ids[-1]:
+                    panels.append(pn.layout.Divider(margin=(5, 0, 5, 0)))
 
         # Add move button and panel
+        panels.append(pn.Spacer(height=10))
         panels.append(self._get_move_panel())
 
-        return pn.Column(*panels, sizing_mode='stretch_width', scroll=True)
+        return pn.Column(*panels, sizing_mode='stretch_width')
 
     def _toggle_move_panel(self, _event):
         """Toggle move panel visibility."""
@@ -1562,18 +1558,18 @@ class ExperimentBrowser(param.Parameterized):
             pn.pane.Markdown("### Selected Files", styles={'margin': '0 0 10px 0'}),
             pn.panel(self._get_file_details_panel),
             sizing_mode='stretch_width',
-            max_height=350,
-            scroll=True,
             styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px'}
         )
 
+        # Single scrollable left column - no nested scrolling
         left_column = pn.Column(
             filters_card,
             files_card,
             selected_files_card,
             width=420,
             sizing_mode='stretch_height',
-            scroll=True
+            scroll=True,
+            styles={'overflow-x': 'hidden'}
         )
 
         # Right column: Plot controls + Visualization (main content area)
