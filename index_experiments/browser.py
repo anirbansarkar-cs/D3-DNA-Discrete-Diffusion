@@ -813,7 +813,7 @@ class ExperimentBrowser(param.Parameterized):
     show_move_panel = param.Boolean(default=False)
 
     # Selected datasets for plotting: list of (file_path, dataset_key) tuples
-    # Each will be available as 'filename.dataset_key' variable in matplotlib code
+    # Each will be available as 'filename_dataset_key' variable in matplotlib code
     selected_datasets = param.List(
         default=[],
         doc="List of (file_path, dataset_key) tuples for plotting"
@@ -831,7 +831,7 @@ class ExperimentBrowser(param.Parameterized):
     # Matplotlib code for visualization (empty by default)
     matplotlib_code = param.String(
         default="",
-        doc="Custom matplotlib code - datasets available as filename.dataset_key"
+        doc="Custom matplotlib code - datasets available as filename_dataset_key"
     )
 
     # Filter parameters
@@ -1186,7 +1186,7 @@ class ExperimentBrowser(param.Parameterized):
         var_names = []
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
-            var_name = f"{filename_stem}.{dataset_key}"
+            var_name = f"{filename_stem}_{dataset_key}"
             var_names.append(var_name)
             controls.append(pn.pane.Markdown(f"- `{var_name}`"))
 
@@ -1252,7 +1252,7 @@ class ExperimentBrowser(param.Parameterized):
 
     def _load_selected_datasets(self):
         """
-        Load all selected datasets and return as dict with filename.dataset_key names.
+        Load all selected datasets and return as dict with filename_dataset_key names.
 
         Returns:
             (datasets_dict, error_msg) - dict maps var_name to numpy array
@@ -1262,7 +1262,7 @@ class ExperimentBrowser(param.Parameterized):
         for file_path, dataset_key in self.selected_datasets:
             try:
                 filename_stem = Path(file_path).stem
-                var_name = f"{filename_stem}.{dataset_key}"
+                var_name = f"{filename_stem}_{dataset_key}"
 
                 # Open file and read dataset
                 with h5py.File(file_path, 'r') as f:
@@ -1295,7 +1295,7 @@ class ExperimentBrowser(param.Parameterized):
         Execute user's matplotlib code with multiple datasets.
 
         Args:
-            datasets_dict: Dict mapping 'filename.dataset_key' to numpy arrays
+            datasets_dict: Dict mapping 'filename_dataset_key' to numpy arrays
 
         Returns:
             Panel pane with figure or error
@@ -1313,10 +1313,7 @@ class ExperimentBrowser(param.Parameterized):
             }
             # Add each dataset as a variable
             for var_name, data in datasets_dict.items():
-                # Replace dots with underscores for valid Python names
-                safe_name = var_name.replace('.', '_')
-                exec_globals[safe_name] = data
-                # Also add with original name for dict-style access
+                # Variable name already uses underscores (valid Python identifier)
                 exec_globals[var_name] = data
 
             # Execute user code
