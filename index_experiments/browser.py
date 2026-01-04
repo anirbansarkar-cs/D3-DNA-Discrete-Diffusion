@@ -9,6 +9,10 @@ import shutil
 import sys
 import h5py
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for server
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 # Add index_experiments directory to path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -24,19 +28,6 @@ except ImportError:
     DASK_AVAILABLE = False
     da = None
 
-# Try to import Datashader (optional dependency)
-try:
-    import datashader as ds
-    import datashader.transfer_functions as tf
-    import holoviews as hv
-    from holoviews.operation.datashader import rasterize, dynspread
-    DATASHADER_AVAILABLE = True
-except ImportError:
-    DATASHADER_AVAILABLE = False
-    ds = None
-    tf = None
-    hv = None
-
 # Constants
 DB_PATH = str(Path(__file__).parent / "experiments.db")
 
@@ -45,16 +36,9 @@ DB_PATH = str(Path(__file__).parent / "experiments.db")
 DASK_THRESHOLD_MB = 100  # 100 MB
 DASK_THRESHOLD_BYTES = DASK_THRESHOLD_MB * 1024 * 1024
 
-# Datashader settings
-DATASHADER_WIDTH = 800   # Output image width
-DATASHADER_HEIGHT = 400  # Output image height
-
 # Performance guardrails
-MAX_RENDER_WIDTH = 2000        # Clamp maximum render resolution
-MAX_RENDER_HEIGHT = 1000
 MIN_ZOOM_WINDOW = 10           # Minimum number of points in zoom window
 MIN_ZOOM_WINDOW_RATIO = 0.001  # Minimum zoom as fraction of total range
-SMALL_DATASET_THRESHOLD = 100  # Datasets smaller than this use simple plot
 
 # Initialize Panel extension
 pn.extension('tabulator')
@@ -754,18 +738,6 @@ class MetricDataState:
 # Performance Guardrails & Validation
 # ============================================================================
 
-def clamp_render_resolution(width: int, height: int) -> tuple:
-    """
-    Clamp render resolution to maximum limits.
-
-    Performance guardrail: Prevents excessive memory usage from
-    accidentally requesting huge images.
-    """
-    clamped_width = min(width, MAX_RENDER_WIDTH)
-    clamped_height = min(height, MAX_RENDER_HEIGHT)
-    return clamped_width, clamped_height
-
-
 def enforce_minimum_zoom(x_start: int, x_end: int, total_size: int) -> tuple:
     """
     Enforce minimum zoom window.
@@ -836,68 +808,6 @@ def validate_dataset_for_plotting(data: np.ndarray, dataset_key: str) -> tuple:
 
 
 # ============================================================================
-# Datashader Rasterization
-# ============================================================================
-
-def rasterize_line_plot(x_vals: np.ndarray, y_vals: np.ndarray,
-                        x_range: tuple, y_range: tuple,
-                        width: int = DATASHADER_WIDTH,
-                        height: int = DATASHADER_HEIGHT) -> Optional[Any]:
-    """
-    Rasterize 1D line data using Datashader.
-
-    Pipeline:
-    1. Input: x and y NumPy arrays + explicit ranges
-    2. Convert to minimal DataFrame
-    3. Rasterize using Datashader with specified ranges
-    4. Output: RGBA image
-
-    Rules:
-    - Rasterize on every view change
-    - Never send raw data to browser
-    - Image resolution matches viewport
-
-    Args:
-        x_vals: X coordinates (index or time)
-        y_vals: Y values (data)
-        x_range: (x_min, x_max) for viewport
-        y_range: (y_min, y_max) for viewport
-        width: Output image width in pixels
-        height: Output image height in pixels
-
-    Returns:
-        Rasterized image or None if datashader unavailable
-    """
-    if not DATASHADER_AVAILABLE:
-        return None
-
-    try:
-        # Apply performance guardrails: clamp resolution
-        width, height = clamp_render_resolution(width, height)
-
-        # Convert to minimal DataFrame (only x, y columns)
-        df = pd.DataFrame({'x': x_vals, 'y': y_vals})
-
-        # Create Datashader canvas with explicit viewport ranges
-        canvas = ds.Canvas(plot_width=width, plot_height=height,
-                          x_range=x_range, y_range=y_range)
-
-        # Rasterize: aggregate points into pixels
-        agg = canvas.line(df, x='x', y='y')
-
-        # Convert to RGBA image
-        img = tf.shade(agg, cmap=['lightblue', 'darkblue'])
-        img = tf.set_background(img, 'white')
-
-        return img
-
-    except Exception as e:
-        # Fail locally but don't crash app
-        print(f"Datashader rasterization error: {e}")
-        return None
-
-
-# ============================================================================
 # Panel Application
 # ============================================================================
 
@@ -940,6 +850,12 @@ class ExperimentBrowser(param.Parameterized):
     metric_validation_status = param.String(
         default="",
         doc="Error message if metric binding is invalid, empty if valid"
+    )
+
+    # Matplotlib code for raw visualization
+    matplotlib_code = param.String(
+        default="plt.figure(figsize=(10, 4))\nplt.plot(x, y)\nplt.xlabel('Index')\nplt.ylabel('Value')\nplt.title('Dataset Visualization')",
+        doc="Custom matplotlib code for raw visualization"
     )
 
     # Filter parameters
@@ -1190,6 +1106,7 @@ class ExperimentBrowser(param.Parameterized):
                         datasets_df,
                         show_index=False,
                         selectable='toggle',  # Make rows clickable
+                        disabled=True,  # Prevent cell editing on click
                         height=200
                     )
 
@@ -1534,7 +1451,7 @@ class ExperimentBrowser(param.Parameterized):
 
         return controls
 
-    @pn.depends('current_dataset_key', 'visualization_mode', 'selected_metric_id')
+    @pn.depends('current_dataset_key', 'visualization_mode', 'selected_metric_id', 'matplotlib_code')
     def _get_plot_controls(self):
         """Create plot controls panel."""
         controls = []
@@ -1602,6 +1519,28 @@ class ExperimentBrowser(param.Parameterized):
                         width=400
                     )
                     controls.append(downsample_slider)
+
+                # Matplotlib code editor
+                controls.append(pn.layout.Divider())
+                controls.append(pn.pane.Markdown("### Matplotlib Code"))
+                controls.append(pn.pane.Markdown(
+                    "_Variables available: `x` (indices), `y` (data values), `plt`, `np`_"
+                ))
+
+                code_editor = pn.widgets.TextAreaInput(
+                    value=self.matplotlib_code,
+                    height=150,
+                    width=500,
+                    name="",
+                    placeholder="Enter matplotlib code..."
+                )
+
+                def on_code_change(event):
+                    self.matplotlib_code = event.new
+                    self.plot_version += 1  # Trigger plot update
+
+                code_editor.param.watch(on_code_change, 'value')
+                controls.append(code_editor)
 
         else:  # derived mode
             # Derived metric controls
@@ -1765,9 +1704,78 @@ class ExperimentBrowser(param.Parameterized):
             print(f"Error computing metric slice: {e}")
             return None, None, {"error": f"Metric computation error: {str(e)}"}
 
+    def _execute_matplotlib_code(self, x_vals, y_vals, metadata):
+        """
+        Execute user's matplotlib code and return a Panel pane with the figure.
+
+        Args:
+            x_vals: X coordinates (indices)
+            y_vals: Y values (data)
+            metadata: Data metadata dict
+
+        Returns:
+            Panel Column with figure and info, or Alert on error
+        """
+        try:
+            # Close any existing figures to prevent memory leaks
+            plt.close('all')
+
+            # Create execution context with restricted globals
+            exec_globals = {
+                'plt': plt,
+                'np': np,
+                'x': x_vals,
+                'y': y_vals,
+            }
+
+            # Execute user code
+            exec(self.matplotlib_code, exec_globals)
+
+            # Get the current figure
+            fig = plt.gcf()
+
+            # Convert figure to PNG bytes
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            buf.seek(0)
+
+            # Close figure to free memory
+            plt.close(fig)
+
+            # Info text
+            info_text = (
+                f"**Source:** {metadata['source']} | "
+                f"**Points:** {metadata['num_points']:,}"
+            )
+            if metadata['num_valid'] < metadata['num_points']:
+                info_text += f" ({metadata['num_points'] - metadata['num_valid']} NaN/Inf filtered)"
+            info_text += (
+                f"\n\n**Range:** X=[{self.x_start}:{self.x_end}] | "
+                f"**Min:** {metadata['data_min']:.4f} | "
+                f"**Max:** {metadata['data_max']:.4f} | "
+                f"**Mean:** {metadata['data_mean']:.4f}"
+            )
+
+            return pn.Column(
+                pn.pane.Markdown("### Data Visualization"),
+                pn.pane.Markdown(info_text),
+                pn.pane.PNG(buf.getvalue(), width=800)
+            )
+
+        except SyntaxError as e:
+            return pn.pane.Alert(
+                f"### Syntax Error in Matplotlib Code\n\n```\n{str(e)}\n```",
+                alert_type="danger"
+            )
+        except Exception as e:
+            return pn.pane.Alert(
+                f"### Error Executing Matplotlib Code\n\n```\n{str(e)}\n```",
+                alert_type="danger"
+            )
+
     @pn.depends('visualization_mode', 'current_dataset_key', 'selected_metric_id',
                 'metric_input_bindings', 'x_start', 'x_end', 'y_min', 'y_max',
-                'downsample_enabled', 'downsample_factor', 'plot_version')
+                'downsample_enabled', 'downsample_factor', 'plot_version', 'matplotlib_code')
     def _get_plot_panel(self):
         """
         Create reactive plot visualization.
@@ -1776,7 +1784,8 @@ class ExperimentBrowser(param.Parameterized):
         - Depends only on PlotState parameters (no raw arrays)
         - No recomputing unless state actually changes
         - No background threads
-        - Reads from FileDataState/MetricDataState, calls Datashader, returns image
+        - Raw mode: executes user matplotlib code
+        - Derived mode: uses HoloViews/Datashader if available
         """
         # Branch based on visualization mode
         if self.visualization_mode == "raw":
@@ -1831,116 +1840,19 @@ class ExperimentBrowser(param.Parameterized):
                 f"Only 1D and 2D datasets are supported for visualization."
             )
 
-        # Edge case: extremely small datasets - use simple plot fallback
-        if len(y_vals) < SMALL_DATASET_THRESHOLD:
-            # Too small for Datashader - use simple scatter plot
-            try:
-                if hv is not None:
-                    y_range = (metadata['data_min'], metadata['data_max'])
-                    x_range = (self.x_start, self.x_end)
+        # Raw mode: use matplotlib with user code
+        if self.visualization_mode == "raw":
+            return self._execute_matplotlib_code(x_vals, y_vals, metadata)
 
-                    # Simple HoloViews scatter plot (no Datashader)
-                    scatter = hv.Scatter((x_vals, y_vals), kdims='x', vdims='y')
-                    scatter = scatter.opts(
-                        width=DATASHADER_WIDTH,
-                        height=DATASHADER_HEIGHT,
-                        size=3,
-                        color='blue',
-                        xlim=x_range,
-                        ylim=y_range,
-                        title=f"Dataset: {self.current_dataset_key} (small dataset)"
-                    )
-
-                    info_text = (
-                        f"**Small Dataset** ({len(y_vals)} points) | "
-                        f"**Source:** {metadata['source']}\n\n"
-                        f"**Min:** {metadata['data_min']:.4f} | "
-                        f"**Max:** {metadata['data_max']:.4f} | "
-                        f"**Mean:** {metadata['data_mean']:.4f}"
-                    )
-
-                    return pn.Column(
-                        pn.pane.Markdown("### Data Visualization (Simple Plot)"),
-                        pn.pane.Markdown(info_text),
-                        pn.pane.HoloViews(scatter, sizing_mode='fixed')
-                    )
-            except Exception as e:
-                print(f"Simple plot error: {e}")
-
-        # Use Datashader for rasterization (HoloViews as thin glue)
-        if DATASHADER_AVAILABLE and hv is not None:
-            try:
-                # Determine y_range (use parameters or auto-compute)
-                if self.y_min == 0.0 and self.y_max == 1.0:
-                    # Auto-range on first load
-                    y_range = (metadata['data_min'], metadata['data_max'])
-                else:
-                    y_range = (self.y_min, self.y_max)
-
-                x_range = (self.x_start, self.x_end)
-
-                # Rasterize with Datashader
-                img = rasterize_line_plot(
-                    x_vals, y_vals,
-                    x_range=x_range,
-                    y_range=y_range,
-                    width=DATASHADER_WIDTH,
-                    height=DATASHADER_HEIGHT
-                )
-
-                if img is not None:
-                    # Wrap in HoloViews for display (thin interaction glue)
-                    # HoloViews role: event plumbing + display container
-                    hv_img = hv.RGB(img, bounds=(x_range[0], y_range[0], x_range[1], y_range[1]))
-                    hv_img = hv_img.opts(
-                        width=DATASHADER_WIDTH,
-                        height=DATASHADER_HEIGHT,
-                        xaxis='bottom',
-                        yaxis='left',
-                        title=f"Dataset: {self.current_dataset_key}"
-                    )
-
-                    # Info panel
-                    info_text = (
-                        f"**Source:** {metadata['source']} | "
-                        f"**Size:** {metadata['size_mb']:.2f} MB | "
-                        f"**Points:** {metadata['num_points']:,}"
-                    )
-                    if metadata['num_valid'] < metadata['num_points']:
-                        info_text += f" ({metadata['num_points'] - metadata['num_valid']} NaN/Inf filtered)"
-
-                    info_text += (
-                        f"\n\n**Range:** X=[{self.x_start}:{self.x_end}], "
-                        f"Y=[{y_range[0]:.4f}:{y_range[1]:.4f}] | "
-                        f"**Min:** {metadata['data_min']:.4f} | "
-                        f"**Max:** {metadata['data_max']:.4f} | "
-                        f"**Mean:** {metadata['data_mean']:.4f}"
-                    )
-
-                    return pn.Column(
-                        pn.pane.Markdown("### Data Visualization (Datashader + HoloViews)"),
-                        pn.pane.Markdown(info_text),
-                        pn.pane.HoloViews(hv_img, sizing_mode='fixed')
-                    )
-
-            except Exception as e:
-                # Fail locally but don't crash app
-                print(f"Datashader/HoloViews rendering error: {e}")
-                return pn.pane.Alert(
-                    f"### Rendering Error\n\nFailed to render plot: {str(e)}",
-                    alert_type="warning"
-                )
-
-        # Fallback: text-only stats
+        # Derived mode: text-only stats (datashader removed)
         return pn.pane.Markdown(
             f"### Data Visualization\n\n"
-            f"**Dataset:** `{self.current_dataset_key}`\n\n"
-            f"**Source:** {metadata['source']} | **Size:** {metadata['size_mb']:.2f} MB\n\n"
-            f"**Range:** [{self.x_start}:{self.x_end}] | **Points:** {metadata['num_points']:,}\n\n"
+            f"**Derived Metric:** `{self.selected_metric_id}`\n\n"
+            f"**Points:** {metadata['num_points']:,}\n\n"
+            f"**Range:** [{self.x_start}:{self.x_end}]\n\n"
             f"**Min:** {metadata['data_min']:.4f} | "
             f"**Max:** {metadata['data_max']:.4f} | "
-            f"**Mean:** {metadata['data_mean']:.4f}\n\n"
-            f"_Install datashader and holoviews for visualization_"
+            f"**Mean:** {metadata['data_mean']:.4f}"
         )
 
     def _build_ui(self):
