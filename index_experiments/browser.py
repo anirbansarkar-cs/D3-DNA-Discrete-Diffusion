@@ -947,9 +947,11 @@ class ExperimentBrowser(param.Parameterized):
                 self.file_tabulator = pn.widgets.Tabulator(
                     display_df,
                     selectable='checkbox',
-                    height=600,
+                    height=350,
                     disabled=True,
-                    show_index=False
+                    show_index=False,
+                    pagination='local',
+                    page_size=10
                 )
                 self.file_tabulator.param.watch(self._on_selection_change, 'selection')
             else:
@@ -1041,10 +1043,10 @@ class ExperimentBrowser(param.Parameterized):
     def _get_file_details_panel(self):
         """Create file details panel based on selection."""
         if not self.selected_file_ids:
-            return pn.pane.Markdown("### File Details\n\n_Select files to view details_")
+            return pn.pane.Markdown("_Select files to view details_", styles={'color': '#888', 'font-style': 'italic'})
 
         panels = []
-        panels.append(pn.pane.Markdown(f"### Selected Files ({len(self.selected_file_ids)})"))
+        panels.append(pn.pane.Markdown(f"**{len(self.selected_file_ids)} file(s) selected**", styles={'margin-bottom': '8px'}))
 
         # Show details for each selected file
         for file_id in self.selected_file_ids:
@@ -1245,10 +1247,9 @@ class ExperimentBrowser(param.Parameterized):
     def _get_plot_controls(self):
         """Create unified Plot panel with controls and code editor."""
         controls = []
-        controls.append(pn.pane.Markdown("### Plot"))
 
         if not self.selected_datasets:
-            controls.append(pn.pane.Markdown("_Select datasets from files above to plot_"))
+            controls.append(pn.pane.Markdown("_Select datasets from files to plot_", styles={'color': '#888', 'font-style': 'italic'}))
             return pn.Column(*controls)
 
         # Show selected datasets and their variable names
@@ -1429,14 +1430,16 @@ class ExperimentBrowser(param.Parameterized):
         """
         Execute user's matplotlib code with multiple datasets.
 
+        Supports multiple figures - each plt.figure() call creates a separate image.
+
         Args:
             datasets_dict: Dict mapping 'filename_dataset_key' to numpy arrays
 
         Returns:
-            Panel pane with figure or error
+            Panel pane with figure(s) or error
         """
         if not self.matplotlib_code.strip():
-            return pn.pane.Markdown("_Enter matplotlib code above and click Run_")
+            return pn.pane.Markdown("_Enter matplotlib code above and click Run_", styles={'color': '#888', 'font-style': 'italic'})
 
         try:
             plt.close('all')
@@ -1454,48 +1457,61 @@ class ExperimentBrowser(param.Parameterized):
             # Execute user code (Python will ignore comments)
             exec(self.matplotlib_code, exec_globals)
 
-            # Get figure
-            fig = plt.gcf()
-            if fig.get_axes():  # Only save if figure has content
-                buf = BytesIO()
-                fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-                buf.seek(0)
-                png_data = buf.getvalue()
-                plt.close(fig)
+            # Get ALL figures created (supports multiple plt.figure() calls)
+            fig_nums = plt.get_fignums()
 
-                # Create download link using base64 data URL
-                import base64
-                b64_data = base64.b64encode(png_data).decode()
-                data_url = f"data:image/png;base64,{b64_data}"
-                
-                # Create HTML with download link
-                download_html = f"""
-                <a href="{data_url}" download="plot.png" style="
-                    display: inline-block;
-                    padding: 8px 16px;
-                    background-color: #007bff;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 4px;
-                    font-weight: 500;
-                    cursor: pointer;
-                ">💾 Save PNG</a>
-                """
-                
-                download_pane = pn.pane.HTML(download_html, width=120, height=40)
+            if not fig_nums:
+                return pn.pane.Markdown("_No figure created. Call plt.figure() or plt.plot()_", styles={'color': '#888', 'font-style': 'italic'})
 
-                return pn.Column(
-                    pn.Row(
+            import base64
+            figure_panes = []
+
+            for i, fig_num in enumerate(fig_nums):
+                fig = plt.figure(fig_num)
+
+                if fig.get_axes():  # Only save if figure has content
+                    buf = BytesIO()
+                    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                    buf.seek(0)
+                    png_data = buf.getvalue()
+
+                    # Create download link using base64 data URL
+                    b64_data = base64.b64encode(png_data).decode()
+                    data_url = f"data:image/png;base64,{b64_data}"
+
+                    # Create HTML with download link
+                    fig_label = f"Figure {i + 1}" if len(fig_nums) > 1 else "plot"
+                    download_html = f"""
+                    <a href="{data_url}" download="{fig_label.lower().replace(' ', '_')}.png" style="
+                        display: inline-block;
+                        padding: 6px 12px;
+                        background-color: #28a745;
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 4px;
+                        font-size: 12px;
+                        font-weight: 500;
+                        cursor: pointer;
+                    ">💾 Save {fig_label}</a>
+                    """
+
+                    download_pane = pn.pane.HTML(download_html, height=35)
+
+                    # Create pane for this figure
+                    fig_pane = pn.Column(
                         pn.pane.PNG(png_data, sizing_mode='stretch_width'),
-                        download_pane,
+                        pn.Row(download_pane, align='end'),
                         sizing_mode='stretch_width',
-                        align='end'
-                    ),
-                    sizing_mode='stretch_width'
-                )
-            else:
-                plt.close(fig)
-                return pn.pane.Markdown("_No figure created. Call plt.figure() or plt.plot()_")
+                        styles={'margin-bottom': '15px', 'border-bottom': '1px solid #eee', 'padding-bottom': '15px'} if i < len(fig_nums) - 1 else {}
+                    )
+                    figure_panes.append(fig_pane)
+
+            plt.close('all')
+
+            if not figure_panes:
+                return pn.pane.Markdown("_No figure content. Add plt.plot() or similar calls._", styles={'color': '#888', 'font-style': 'italic'})
+
+            return pn.Column(*figure_panes, sizing_mode='stretch_width')
 
         except SyntaxError as e:
             return pn.pane.Alert(f"**Syntax Error:** {str(e)}", alert_type="danger")
@@ -1527,43 +1543,70 @@ class ExperimentBrowser(param.Parameterized):
         db_info = self._get_db_info_pane()
         self.template.header.append(db_info)
 
-        # Left column: Filters and file list
-        filters_panel = pn.Column(
-            pn.pane.Markdown("## Filters"),
-            self.file_type_widget,
-            self.owner_widget,
-            self.date_widget,
-            self.search_widget,
-            pn.layout.Divider()
-        )
-
         # Initialize file list
         self._update_file_list()
 
-        file_list_panel = pn.Column(
-            pn.pane.Markdown("## Files"),
-            self.file_tabulator,
-            self._get_file_summary
+        # Left column: Filters, Files, and Selected Files (compact sidebar)
+        left_column = pn.Column(
+            pn.Card(
+                self.file_type_widget,
+                self.owner_widget,
+                self.date_widget,
+                self.search_widget,
+                title="Filters",
+                collapsed=False,
+                sizing_mode='stretch_width',
+                styles={'margin-bottom': '10px'}
+            ),
+            pn.Card(
+                self.file_tabulator,
+                self._get_file_summary,
+                title="Files",
+                collapsed=False,
+                sizing_mode='stretch_width',
+                styles={'margin-bottom': '10px'}
+            ),
+            pn.Card(
+                self._get_file_details_panel,
+                title="Selected Files",
+                collapsed=False,
+                sizing_mode='stretch_width',
+                max_height=400,
+                styles={'overflow-y': 'auto'}
+            ),
+            width=400,
+            sizing_mode='stretch_height',
+            scroll=True
         )
 
-        left_column = pn.Column(filters_panel, file_list_panel)
-
-        # Right column: File details + Plot controls + Visualization
+        # Right column: Plot controls + Visualization (main content area)
         right_column = pn.Column(
-            self._get_file_details_panel,
-            pn.layout.Divider(),
-            self._get_plot_controls,
-            pn.layout.Divider(),
-            self._get_plot_panel
+            pn.Card(
+                self._get_plot_controls,
+                title="Plot Controls",
+                collapsed=False,
+                sizing_mode='stretch_width',
+                styles={'margin-bottom': '10px'}
+            ),
+            pn.Card(
+                self._get_plot_panel,
+                title="Visualization",
+                collapsed=False,
+                sizing_mode='stretch_both',
+            ),
+            sizing_mode='stretch_both'
         )
 
-        # Create grid layout
-        grid = pn.GridSpec(ncols=2, nrows=1, sizing_mode='stretch_width')
-        grid[0, 0] = left_column
-        grid[0, 1] = right_column
+        # Create row layout with fixed left sidebar and flexible right content
+        main_layout = pn.Row(
+            left_column,
+            right_column,
+            sizing_mode='stretch_both',
+            styles={'gap': '15px', 'padding': '10px'}
+        )
 
         # Add to template
-        self.template.main.append(grid)
+        self.template.main.append(main_layout)
 
     def servable(self):
         """Return the servable template."""
