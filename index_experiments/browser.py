@@ -891,7 +891,7 @@ class ExperimentBrowser(param.Parameterized):
 
                                 # Reset view window based on dataset shape
                                 if self.file_data_state.dataset_shape:
-                                    max_dim = self.file_data_state.dataset_shape[0]
+                                    max_dim = int(self.file_data_state.dataset_shape[0])
                                     self.x_start = 0
                                     self.x_end = min(max_dim, 1000)  # Default to first 1000 points
 
@@ -1043,7 +1043,7 @@ class ExperimentBrowser(param.Parameterized):
             ))
 
             # X range slider (for first dimension)
-            max_dim = self.file_data_state.dataset_shape[0]
+            max_dim = int(self.file_data_state.dataset_shape[0])
 
             x_range_slider = pn.widgets.RangeSlider(
                 name="X Range",
@@ -1055,7 +1055,7 @@ class ExperimentBrowser(param.Parameterized):
             )
 
             def update_x_range(event):
-                self.x_start, self.x_end = event.new
+                self.x_start, self.x_end = int(event.new[0]), int(event.new[1])
                 # State is automatically updated via reactive parameters
                 # No need to call set_slice_params - we read directly from dataset handle
 
@@ -1098,7 +1098,7 @@ class ExperimentBrowser(param.Parameterized):
 
         try:
             # Apply performance guardrail: enforce minimum zoom window
-            total_size = self.file_data_state.dataset_shape[0] if self.file_data_state.dataset_shape else 0
+            total_size = int(self.file_data_state.dataset_shape[0]) if self.file_data_state.dataset_shape else 0
             if total_size == 0:
                 return None, None, {"error": "Dataset has zero size"}
 
