@@ -805,6 +805,17 @@ def validate_dataset_for_plotting(data: np.ndarray, dataset_key: str) -> tuple:
 # Panel Application
 # ============================================================================
 
+def make_var_name(filename_stem: str, dataset_key: str) -> str:
+    """
+    Create a valid Python variable name from filename and dataset key.
+
+    Handles nested datasets (e.g., 'group/subdata' -> 'file_group_subdata').
+    """
+    # Replace / with _ for nested datasets
+    key_clean = dataset_key.replace('/', '_')
+    return f"{filename_stem}_{key_clean}"
+
+
 class ExperimentBrowser(param.Parameterized):
     """Main Panel application for browsing experiment files."""
 
@@ -1085,20 +1096,40 @@ class ExperimentBrowser(param.Parameterized):
                 datasets_df = get_file_datasets(file_id)
 
                 if not datasets_df.empty:
+                    # Group datasets by parent (for nested datasets like group/subdata)
+                    current_group = None
                     for _, row in datasets_df.iterrows():
                         dataset_key = row['key']
                         shape_str = row.get('shape', '?')
-                        dtype_str = row.get('dtype', '?')
+
+                        # Check if this is a nested dataset
+                        if '/' in dataset_key:
+                            parts = dataset_key.split('/')
+                            group = parts[0]
+                            subkey = '/'.join(parts[1:])
+                            # Show group header if new group
+                            if group != current_group:
+                                current_group = group
+                                panels.append(pn.pane.Markdown(
+                                    f"**{group}/**",
+                                    styles={'font-size': '11px', 'margin': '5px 0 2px 15px', 'color': '#555'}
+                                ))
+                            display_name = f"└ {subkey} {shape_str}"
+                            indent = 25
+                        else:
+                            current_group = None
+                            display_name = f"{dataset_key} {shape_str}"
+                            indent = 15
 
                         # Check if this dataset is already selected
                         is_selected = (file_path, dataset_key) in self.selected_datasets
 
                         # Create compact checkbox
                         cb = pn.widgets.Checkbox(
-                            name=f"{dataset_key} {shape_str}",
+                            name=display_name,
                             value=is_selected,
                             styles={'font-size': '11px'},
-                            margin=(2, 0, 2, 15)
+                            margin=(2, 0, 2, indent)
                         )
 
                         # Callback to add/remove from selected_datasets
@@ -1258,7 +1289,7 @@ class ExperimentBrowser(param.Parameterized):
         max_size = 100  # default
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
-            var_name = f"{filename_stem}_{dataset_key}"
+            var_name = make_var_name(filename_stem, dataset_key)
             var_names.append(var_name)
             # Get shape to determine max size
             shape = self._get_full_shape(file_path, dataset_key)
@@ -1380,7 +1411,7 @@ class ExperimentBrowser(param.Parameterized):
         shapes = {}
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
-            var_name = f"{filename_stem}_{dataset_key}"
+            var_name = make_var_name(filename_stem, dataset_key)
 
             full_shape = self._get_full_shape(file_path, dataset_key)
             if full_shape is None:
@@ -1412,7 +1443,7 @@ class ExperimentBrowser(param.Parameterized):
         for file_path, dataset_key in self.selected_datasets:
             try:
                 filename_stem = Path(file_path).stem
-                var_name = f"{filename_stem}_{dataset_key}"
+                var_name = make_var_name(filename_stem, dataset_key)
 
                 # Open file and read dataset
                 with h5py.File(file_path, 'r') as f:
