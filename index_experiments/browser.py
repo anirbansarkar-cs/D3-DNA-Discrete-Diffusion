@@ -1420,7 +1420,9 @@ class ExperimentBrowser(param.Parameterized):
         """
         Execute user's matplotlib code with multiple datasets.
 
-        Supports multiple figures - each plt.figure() call creates a separate image.
+        Supports multiple figures via:
+        - plt.figure() calls to create new figures
+        - plt.show() calls to finalize current figure and start a new one
 
         Args:
             datasets_dict: Dict mapping 'filename_dataset_key' to numpy arrays
@@ -1434,72 +1436,95 @@ class ExperimentBrowser(param.Parameterized):
         try:
             plt.close('all')
 
+            # Collected figures from plt.show() calls
+            captured_figures = []
+
+            # Custom show function that captures the current figure
+            def custom_show():
+                fig = plt.gcf()
+                if fig.get_axes():  # Only capture if figure has content
+                    captured_figures.append(fig)
+                    # Create a new figure for subsequent plots
+                    plt.figure()
+
             # Build execution context with all datasets
             exec_globals = {
                 'plt': plt,
                 'np': np,
+                'show': custom_show,  # Also expose as standalone function
             }
             # Add each dataset as a variable
             for var_name, data in datasets_dict.items():
-                # Variable name already uses underscores (valid Python identifier)
                 exec_globals[var_name] = data
 
-            # Execute user code (Python will ignore comments)
-            exec(self.matplotlib_code, exec_globals)
+            # Temporarily replace plt.show with our custom version
+            original_show = plt.show
+            plt.show = custom_show
 
-            # Get ALL figures created (supports multiple plt.figure() calls)
-            fig_nums = plt.get_fignums()
+            try:
+                # Execute user code
+                exec(self.matplotlib_code, exec_globals)
+            finally:
+                # Restore original plt.show
+                plt.show = original_show
 
-            if not fig_nums:
+            # Also capture any remaining figure that wasn't show()'d
+            remaining_fig = plt.gcf()
+            if remaining_fig.get_axes() and remaining_fig not in captured_figures:
+                captured_figures.append(remaining_fig)
+
+            # If no figures were captured via show(), fall back to getting all figures
+            if not captured_figures:
+                fig_nums = plt.get_fignums()
+                for fig_num in fig_nums:
+                    fig = plt.figure(fig_num)
+                    if fig.get_axes():
+                        captured_figures.append(fig)
+
+            if not captured_figures:
                 return pn.pane.Markdown("_No figure created. Call plt.figure() or plt.plot()_", styles={'color': '#888', 'font-style': 'italic'})
 
             import base64
             figure_panes = []
 
-            for i, fig_num in enumerate(fig_nums):
-                fig = plt.figure(fig_num)
+            for i, fig in enumerate(captured_figures):
+                buf = BytesIO()
+                fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                buf.seek(0)
+                png_data = buf.getvalue()
 
-                if fig.get_axes():  # Only save if figure has content
-                    buf = BytesIO()
-                    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-                    buf.seek(0)
-                    png_data = buf.getvalue()
+                # Create download link using base64 data URL
+                b64_data = base64.b64encode(png_data).decode()
+                data_url = f"data:image/png;base64,{b64_data}"
 
-                    # Create download link using base64 data URL
-                    b64_data = base64.b64encode(png_data).decode()
-                    data_url = f"data:image/png;base64,{b64_data}"
+                # Create HTML with download link
+                fig_label = f"Figure {i + 1}" if len(captured_figures) > 1 else "plot"
+                download_html = f"""
+                <a href="{data_url}" download="{fig_label.lower().replace(' ', '_')}.png" style="
+                    display: inline-block;
+                    padding: 6px 12px;
+                    background-color: #28a745;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    font-weight: 500;
+                    cursor: pointer;
+                ">💾 Save {fig_label}</a>
+                """
 
-                    # Create HTML with download link
-                    fig_label = f"Figure {i + 1}" if len(fig_nums) > 1 else "plot"
-                    download_html = f"""
-                    <a href="{data_url}" download="{fig_label.lower().replace(' ', '_')}.png" style="
-                        display: inline-block;
-                        padding: 6px 12px;
-                        background-color: #28a745;
-                        color: white;
-                        text-decoration: none;
-                        border-radius: 4px;
-                        font-size: 12px;
-                        font-weight: 500;
-                        cursor: pointer;
-                    ">💾 Save {fig_label}</a>
-                    """
+                download_pane = pn.pane.HTML(download_html, height=35)
 
-                    download_pane = pn.pane.HTML(download_html, height=35)
-
-                    # Create pane for this figure
-                    fig_pane = pn.Column(
-                        pn.pane.PNG(png_data, sizing_mode='stretch_width'),
-                        pn.Row(download_pane, align='end'),
-                        sizing_mode='stretch_width',
-                        styles={'margin-bottom': '15px', 'border-bottom': '1px solid #eee', 'padding-bottom': '15px'} if i < len(fig_nums) - 1 else {}
-                    )
-                    figure_panes.append(fig_pane)
+                # Create pane for this figure
+                fig_pane = pn.Column(
+                    pn.pane.PNG(png_data, sizing_mode='stretch_width'),
+                    pn.Row(download_pane, align='end'),
+                    sizing_mode='stretch_width',
+                    styles={'margin-bottom': '15px', 'border-bottom': '1px solid #eee', 'padding-bottom': '15px'} if i < len(captured_figures) - 1 else {}
+                )
+                figure_panes.append(fig_pane)
 
             plt.close('all')
-
-            if not figure_panes:
-                return pn.pane.Markdown("_No figure content. Add plt.plot() or similar calls._", styles={'color': '#888', 'font-style': 'italic'})
 
             return pn.Column(*figure_panes, sizing_mode='stretch_width')
 
