@@ -102,13 +102,13 @@ class DerivedMetric:
     compute_fn: Callable[[Dict[str, Any]], Any]
     # Signature: compute_fn({"input_key": dask_array, ...}) -> dask_array
 
+    # Output shape computation (required)
+    output_shape_fn: Callable[[Dict[str, tuple]], tuple]
+    # Signature: output_shape_fn({"input_key": shape, ...}) -> output_shape
+
     # Shape validation (optional)
     validate_shapes_fn: Optional[Callable[[Dict[str, tuple]], Tuple[bool, str]]] = None
     # Signature: validate_shapes_fn({"input_key": shape, ...}) -> (is_valid, error_msg)
-
-    # Output shape computation
-    output_shape_fn: Callable[[Dict[str, tuple]], tuple]
-    # Signature: output_shape_fn({"input_key": shape, ...}) -> output_shape
 
     # Projection hint for multi-dimensional outputs (future use)
     default_projection: Optional[str] = None
@@ -347,8 +347,8 @@ class MetricRegistry:
                 MetricInputSpec(name="Component B", key="b")
             ],
             compute_fn=lambda inputs: da.sqrt(inputs["a"]**2 + inputs["b"]**2),
-            validate_shapes_fn=_validate_broadcastable,
-            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"])
+            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"]),
+            validate_shapes_fn=_validate_broadcastable
         ))
 
         # =================================================================
@@ -363,8 +363,8 @@ class MetricRegistry:
                 MetricInputSpec(name="Dataset B", key="b")
             ],
             compute_fn=lambda inputs: inputs["a"] - inputs["b"],
-            validate_shapes_fn=_validate_broadcastable,
-            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"])
+            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"]),
+            validate_shapes_fn=_validate_broadcastable
         ))
 
         # =================================================================
@@ -383,8 +383,8 @@ class MetricRegistry:
                 inputs["a"] / inputs["b"],
                 da.nan
             ),
-            validate_shapes_fn=_validate_broadcastable,
-            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"])
+            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"]),
+            validate_shapes_fn=_validate_broadcastable
         ))
 
         # =================================================================
@@ -399,8 +399,8 @@ class MetricRegistry:
                 MetricInputSpec(name="Dataset B", key="b")
             ],
             compute_fn=lambda inputs: inputs["a"] + inputs["b"],
-            validate_shapes_fn=_validate_broadcastable,
-            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"])
+            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"]),
+            validate_shapes_fn=_validate_broadcastable
         ))
 
         # =================================================================
@@ -415,8 +415,8 @@ class MetricRegistry:
                 MetricInputSpec(name="Dataset B", key="b")
             ],
             compute_fn=lambda inputs: inputs["a"] * inputs["b"],
-            validate_shapes_fn=_validate_broadcastable,
-            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"])
+            output_shape_fn=lambda shapes: np.broadcast_shapes(shapes["a"], shapes["b"]),
+            validate_shapes_fn=_validate_broadcastable
         ))
 
 
