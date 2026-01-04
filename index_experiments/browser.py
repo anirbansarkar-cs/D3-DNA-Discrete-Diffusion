@@ -1003,6 +1003,17 @@ class ExperimentBrowser(param.Parameterized):
                             new_indices.append(idx)
                     self.file_tabulator.selection = new_indices
 
+    @pn.depends('file_type_filter', 'owner_filter', 'date_filter', 'search_filter')
+    def _get_file_summary(self):
+        """Get file count and total size summary."""
+        if hasattr(self, '_total_files') and hasattr(self, '_total_size'):
+            total_size_str = format_file_size(self._total_size)
+            return pn.pane.Markdown(
+                f"**{self._total_files} file(s)** | Total size: **{total_size_str}**",
+                styles={'font-size': '12px', 'color': '#666'}
+            )
+        return pn.pane.Markdown("")
+
     @pn.depends('selected_file_ids')
     def _get_file_details_panel(self):
         """Create file details panel based on selection."""
@@ -1505,21 +1516,10 @@ class ExperimentBrowser(param.Parameterized):
         # Initialize file list
         self._update_file_list()
 
-        @pn.depends('file_type_filter', 'owner_filter', 'date_filter', 'search_filter')
-        def _get_file_summary():
-            """Get file count and total size summary."""
-            if hasattr(self, '_total_files') and hasattr(self, '_total_size'):
-                total_size_str = format_file_size(self._total_size)
-                return pn.pane.Markdown(
-                    f"**{self._total_files} file(s)** | Total size: **{total_size_str}**",
-                    styles={'font-size': '12px', 'color': '#666'}
-                )
-            return pn.pane.Markdown("")
-        
         file_list_panel = pn.Column(
             pn.pane.Markdown("## Files"),
             self.file_tabulator,
-            _get_file_summary
+            self._get_file_summary
         )
 
         left_column = pn.Column(filters_panel, file_list_panel)
