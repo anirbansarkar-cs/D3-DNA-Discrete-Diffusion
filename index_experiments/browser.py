@@ -846,6 +846,10 @@ class ExperimentBrowser(param.Parameterized):
         # Initialize file data state (not a Param object)
         self.file_data_state = FileDataState()
 
+        # Initialize summary attributes
+        self._total_files = 0
+        self._total_size = 0
+
         # Initialize filter options
         self._update_filter_options()
 
@@ -934,6 +938,9 @@ class ExperimentBrowser(param.Parameterized):
 
             # Store original df for ID lookup
             self._current_df = df
+            # Store summary info
+            self._total_files = len(df)
+            self._total_size = df['size'].sum()
 
             # Create or update tabulator
             if self.file_tabulator is None:
@@ -949,6 +956,8 @@ class ExperimentBrowser(param.Parameterized):
                 self.file_tabulator.value = display_df
         else:
             self._current_df = pd.DataFrame()
+            self._total_files = 0
+            self._total_size = 0
             if self.file_tabulator is None:
                 self.file_tabulator = pn.pane.Markdown("No files match the current filters.")
             else:
@@ -1224,6 +1233,20 @@ class ExperimentBrowser(param.Parameterized):
 
         chunk_slider.param.watch(update_chunk_range, 'value')
         controls.append(chunk_slider)
+        
+        # Show chunked shapes
+        @pn.depends('selected_datasets', 'x_start', 'x_end', 'downsample_enabled', 'downsample_factor')
+        def _get_shape_info():
+            shapes = self._get_chunked_shapes()
+            if shapes:
+                shape_parts = [f"`{var}`: {shape}" for var, shape in shapes.items()]
+                return pn.pane.Markdown(
+                    "**Shapes:** " + " | ".join(shape_parts),
+                    styles={'font-size': '11px', 'color': '#666'}
+                )
+            return pn.pane.Markdown("")
+        
+        controls.append(_get_shape_info)
 
         # Downsampling
         controls.append(pn.Row(
@@ -1241,16 +1264,39 @@ class ExperimentBrowser(param.Parameterized):
         vars_hint = ", ".join([f"`{v}`" for v in var_names])
         controls.append(pn.pane.Markdown(f"**Code** _(vars: {vars_hint}, `plt`, `np`)_"))
 
+        # Generate code with variable comments
+        def get_code_with_vars():
+            if not var_names:
+                return self.matplotlib_code
+            
+            # Generate comment block with available variables
+            comment_lines = ["# Available variables:"]
+            for var in var_names:
+                comment_lines.append(f"#   {var}")
+            comment_lines.append("# Also available: plt, np")
+            comment_lines.append("")
+            var_comments = "\n".join(comment_lines)
+            
+            # If code doesn't start with these comments, prepend them
+            if self.matplotlib_code and not self.matplotlib_code.strip().startswith("# Available variables:"):
+                return var_comments + self.matplotlib_code
+            elif not self.matplotlib_code.strip():
+                return var_comments
+            else:
+                return self.matplotlib_code
+
         # Code editor (TextAreaInput - tab inserts spaces via JS workaround if needed)
         code_editor = pn.widgets.TextAreaInput(
-            value=self.matplotlib_code,
+            value=get_code_with_vars(),
             placeholder="# Enter matplotlib code here\n# Available: plt, np, and your selected datasets",
             height=200,
             sizing_mode='stretch_width'
         )
 
         def on_code_change(event):
-            self.matplotlib_code = event.new
+            code = event.new
+            # Store the code as-is (with comments if user includes them)
+            self.matplotlib_code = code
             self.plot_version += 1
 
         code_editor.param.watch(on_code_change, 'value')
@@ -1264,6 +1310,45 @@ class ExperimentBrowser(param.Parameterized):
         controls.append(run_btn)
 
         return pn.Column(*controls, sizing_mode='stretch_width')
+
+    def _get_chunked_shapes(self):
+        """
+        Get expected shapes after chunking for selected datasets.
+        
+        Returns:
+            dict mapping var_name to shape tuple, or None if error
+        """
+        shapes = {}
+        for file_path, dataset_key in self.selected_datasets:
+            try:
+                filename_stem = Path(file_path).stem
+                var_name = f"{filename_stem}_{dataset_key}"
+                
+                with h5py.File(file_path, 'r') as h5file:
+                    if dataset_key not in h5file:
+                        return None
+                    ds = h5file[dataset_key]
+                    shape = ds.shape
+                    total_size = shape[0] if shape else 0
+                    
+                    # Calculate chunked shape
+                    x_start = min(self.x_start, total_size)
+                    x_end = min(self.x_end, total_size)
+                    
+                    if self.downsample_enabled:
+                        chunked_len = len(range(x_start, x_end, self.downsample_factor))
+                    else:
+                        chunked_len = x_end - x_start
+                    
+                    if len(shape) == 1:
+                        chunked_shape = (chunked_len,)
+                    else:
+                        chunked_shape = (chunked_len,) + shape[1:]
+                    
+                    shapes[var_name] = chunked_shape
+            except Exception:
+                return None
+        return shapes
 
     def _load_selected_datasets(self):
         """
@@ -1331,7 +1416,7 @@ class ExperimentBrowser(param.Parameterized):
                 # Variable name already uses underscores (valid Python identifier)
                 exec_globals[var_name] = data
 
-            # Execute user code
+            # Execute user code (Python will ignore comments)
             exec(self.matplotlib_code, exec_globals)
 
             # Get figure
@@ -1340,17 +1425,38 @@ class ExperimentBrowser(param.Parameterized):
                 buf = BytesIO()
                 fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
                 buf.seek(0)
+                png_data = buf.getvalue()
                 plt.close(fig)
 
-                # Info text
-                info_parts = [f"**Chunk:** [{self.x_start}:{self.x_end}]"]
-                for var_name, data in datasets_dict.items():
-                    info_parts.append(f"`{var_name}`: {data.shape}")
-                info_text = " | ".join(info_parts)
+                # Create download link using base64 data URL
+                import base64
+                b64_data = base64.b64encode(png_data).decode()
+                data_url = f"data:image/png;base64,{b64_data}"
+                
+                # Create HTML with download link
+                download_html = f"""
+                <a href="{data_url}" download="plot.png" style="
+                    display: inline-block;
+                    padding: 8px 16px;
+                    background-color: #007bff;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 4px;
+                    font-weight: 500;
+                    cursor: pointer;
+                ">💾 Save PNG</a>
+                """
+                
+                download_pane = pn.pane.HTML(download_html, width=120, height=40)
 
                 return pn.Column(
-                    pn.pane.PNG(buf.getvalue(), sizing_mode='stretch_width'),
-                    pn.pane.Markdown(info_text)
+                    pn.Row(
+                        pn.pane.PNG(png_data, sizing_mode='stretch_width'),
+                        download_pane,
+                        sizing_mode='stretch_width',
+                        align='end'
+                    ),
+                    sizing_mode='stretch_width'
                 )
             else:
                 plt.close(fig)
@@ -1399,9 +1505,21 @@ class ExperimentBrowser(param.Parameterized):
         # Initialize file list
         self._update_file_list()
 
+        @pn.depends('file_type_filter', 'owner_filter', 'date_filter', 'search_filter')
+        def _get_file_summary():
+            """Get file count and total size summary."""
+            if hasattr(self, '_total_files') and hasattr(self, '_total_size'):
+                total_size_str = format_file_size(self._total_size)
+                return pn.pane.Markdown(
+                    f"**{self._total_files} file(s)** | Total size: **{total_size_str}**",
+                    styles={'font-size': '12px', 'color': '#666'}
+                )
+            return pn.pane.Markdown("")
+        
         file_list_panel = pn.Column(
             pn.pane.Markdown("## Files"),
-            self.file_tabulator
+            self.file_tabulator,
+            _get_file_summary
         )
 
         left_column = pn.Column(filters_panel, file_list_panel)
