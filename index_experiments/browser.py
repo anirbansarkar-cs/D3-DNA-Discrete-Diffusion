@@ -1253,21 +1253,33 @@ class ExperimentBrowser(param.Parameterized):
             controls.append(pn.pane.Markdown("_Select datasets from files to plot_", styles={'color': '#888', 'font-style': 'italic'}))
             return pn.Column(*controls)
 
-        # Build var_names for code hints
+        # Build var_names for code hints and find max dataset size
         var_names = []
+        max_size = 100  # default
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
             var_name = f"{filename_stem}_{dataset_key}"
             var_names.append(var_name)
+            # Get shape to determine max size
+            shape = self._get_full_shape(file_path, dataset_key)
+            if shape and len(shape) > 0:
+                max_size = max(max_size, shape[0])
 
-        # Chunk range (inline label + slider)
+        # Clamp current values to valid range
+        x_start = min(self.x_start, max_size)
+        x_end = min(self.x_end, max_size)
+        if x_end <= x_start:
+            x_end = min(x_start + 100, max_size)
+
+        # Chunk range slider with dynamic limits
         chunk_slider = pn.widgets.RangeSlider(
             name="",
             start=0,
-            end=10000,
-            value=(self.x_start, self.x_end),
+            end=max_size,
+            value=(x_start, x_end),
             step=1,
-            sizing_mode='stretch_width'
+            sizing_mode='stretch_width',
+            bar_color='#007bff'
         )
 
         def update_chunk_range(event):
@@ -1276,9 +1288,16 @@ class ExperimentBrowser(param.Parameterized):
 
         chunk_slider.param.watch(update_chunk_range, 'value')
 
+        # Range info display
+        range_info = pn.pane.Markdown(
+            f"`[{x_start}:{x_end}]` of {max_size}",
+            styles={'font-size': '11px', 'color': '#666', 'margin-left': '10px', 'white-space': 'nowrap'}
+        )
+
         controls.append(pn.Row(
-            pn.pane.Markdown("**Chunk:**", styles={'margin-right': '8px', 'white-space': 'nowrap'}),
+            pn.pane.Markdown("**Range:**", styles={'margin-right': '5px', 'white-space': 'nowrap', 'font-size': '12px'}),
             chunk_slider,
+            range_info,
             align='center',
             sizing_mode='stretch_width'
         ))
@@ -1484,7 +1503,6 @@ class ExperimentBrowser(param.Parameterized):
             if not captured_figures:
                 return pn.pane.Markdown("_No figure created. Call plt.figure() or plt.plot()_", styles={'color': '#888', 'font-style': 'italic'})
 
-            import base64
             figure_panes = []
 
             for i, fig in enumerate(captured_figures):
@@ -1493,40 +1511,20 @@ class ExperimentBrowser(param.Parameterized):
                 buf.seek(0)
                 png_data = buf.getvalue()
 
-                # Create download link using base64 data URL
-                b64_data = base64.b64encode(png_data).decode()
-                data_url = f"data:image/png;base64,{b64_data}"
+                # Label for multiple figures
+                if len(captured_figures) > 1:
+                    figure_panes.append(pn.pane.Markdown(f"**Figure {i + 1}**", styles={'margin': '10px 0 5px 0', 'font-size': '12px'}))
 
-                # Create HTML with download link
-                fig_label = f"Figure {i + 1}" if len(captured_figures) > 1 else "plot"
-                download_html = f"""
-                <a href="{data_url}" download="{fig_label.lower().replace(' ', '_')}.png" style="
-                    display: inline-block;
-                    padding: 6px 12px;
-                    background-color: #28a745;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    font-weight: 500;
-                    cursor: pointer;
-                ">💾 Save {fig_label}</a>
-                """
+                # Create pane for this figure - use fixed height to prevent overlap
+                figure_panes.append(pn.pane.PNG(png_data, sizing_mode='scale_width'))
 
-                download_pane = pn.pane.HTML(download_html, height=35)
-
-                # Create pane for this figure
-                fig_pane = pn.Column(
-                    pn.pane.PNG(png_data, sizing_mode='stretch_width'),
-                    pn.Row(download_pane, align='end'),
-                    sizing_mode='stretch_width',
-                    styles={'margin-bottom': '15px', 'border-bottom': '1px solid #eee', 'padding-bottom': '15px'} if i < len(captured_figures) - 1 else {}
-                )
-                figure_panes.append(fig_pane)
+                # Add separator between figures
+                if i < len(captured_figures) - 1:
+                    figure_panes.append(pn.layout.Divider(margin=(10, 0, 10, 0)))
 
             plt.close('all')
 
-            return pn.Column(*figure_panes, sizing_mode='stretch_width')
+            return pn.Column(*figure_panes, sizing_mode='stretch_width', scroll=True)
 
         except SyntaxError as e:
             return pn.pane.Alert(f"**Syntax Error:** {str(e)}", alert_type="danger")
