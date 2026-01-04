@@ -1046,7 +1046,6 @@ class ExperimentBrowser(param.Parameterized):
             return pn.pane.Markdown("_Select files to view details_", styles={'color': '#888', 'font-style': 'italic'})
 
         panels = []
-        panels.append(pn.pane.Markdown(f"**{len(self.selected_file_ids)} file(s) selected**", styles={'margin-bottom': '8px'}))
 
         # Show details for each selected file
         for file_id in self.selected_file_ids:
@@ -1547,53 +1546,60 @@ class ExperimentBrowser(param.Parameterized):
         self._update_file_list()
 
         # Left column: Filters, Files, and Selected Files (compact sidebar)
+        filters_card = pn.Column(
+            pn.pane.Markdown("### Filters", styles={'margin': '0 0 10px 0'}),
+            self.file_type_widget,
+            self.owner_widget,
+            self.date_widget,
+            self.search_widget,
+            sizing_mode='stretch_width',
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '15px'}
+        )
+
+        files_card = pn.Column(
+            pn.pane.Markdown("### Files", styles={'margin': '0 0 10px 0'}),
+            self.file_tabulator,
+            pn.panel(self._get_file_summary),
+            sizing_mode='stretch_width',
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '15px'}
+        )
+
+        selected_files_card = pn.Column(
+            pn.pane.Markdown("### Selected Files", styles={'margin': '0 0 10px 0'}),
+            pn.panel(self._get_file_details_panel),
+            sizing_mode='stretch_width',
+            max_height=350,
+            scroll=True,
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px'}
+        )
+
         left_column = pn.Column(
-            pn.Card(
-                self.file_type_widget,
-                self.owner_widget,
-                self.date_widget,
-                self.search_widget,
-                title="Filters",
-                collapsed=False,
-                sizing_mode='stretch_width',
-                styles={'margin-bottom': '10px'}
-            ),
-            pn.Card(
-                self.file_tabulator,
-                self._get_file_summary,
-                title="Files",
-                collapsed=False,
-                sizing_mode='stretch_width',
-                styles={'margin-bottom': '10px'}
-            ),
-            pn.Card(
-                self._get_file_details_panel,
-                title="Selected Files",
-                collapsed=False,
-                sizing_mode='stretch_width',
-                max_height=400,
-                styles={'overflow-y': 'auto'}
-            ),
-            width=400,
+            filters_card,
+            files_card,
+            selected_files_card,
+            width=420,
             sizing_mode='stretch_height',
             scroll=True
         )
 
         # Right column: Plot controls + Visualization (main content area)
+        plot_controls_card = pn.Column(
+            pn.pane.Markdown("### Plot Controls", styles={'margin': '0 0 10px 0'}),
+            pn.panel(self._get_plot_controls),
+            sizing_mode='stretch_width',
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'margin-bottom': '15px'}
+        )
+
+        visualization_card = pn.Column(
+            pn.pane.Markdown("### Visualization", styles={'margin': '0 0 10px 0'}),
+            pn.panel(self._get_plot_panel),
+            sizing_mode='stretch_both',
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px'}
+        )
+
         right_column = pn.Column(
-            pn.Card(
-                self._get_plot_controls,
-                title="Plot Controls",
-                collapsed=False,
-                sizing_mode='stretch_width',
-                styles={'margin-bottom': '10px'}
-            ),
-            pn.Card(
-                self._get_plot_panel,
-                title="Visualization",
-                collapsed=False,
-                sizing_mode='stretch_both',
-            ),
+            plot_controls_card,
+            visualization_card,
             sizing_mode='stretch_both'
         )
 
@@ -1602,7 +1608,7 @@ class ExperimentBrowser(param.Parameterized):
             left_column,
             right_column,
             sizing_mode='stretch_both',
-            styles={'gap': '15px', 'padding': '10px'}
+            styles={'gap': '20px', 'padding': '15px'}
         )
 
         # Add to template
