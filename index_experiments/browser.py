@@ -822,8 +822,6 @@ class ExperimentBrowser(param.Parameterized):
     # Plot control parameters
     x_start = param.Integer(default=0)
     x_end = param.Integer(default=100)
-    downsample_enabled = param.Boolean(default=False)
-    downsample_factor = param.Integer(default=10, bounds=(1, 1000))
 
     # Trigger for plot updates (increment to force recompute)
     plot_version = param.Integer(default=0)
@@ -845,6 +843,9 @@ class ExperimentBrowser(param.Parameterized):
 
         # Initialize file data state (not a Param object)
         self.file_data_state = FileDataState()
+
+        # Cache for dataset shapes: (file_path, dataset_key) -> full_shape
+        self._shape_cache = {}
 
         # Initialize summary attributes
         self._total_files = 0
@@ -951,7 +952,12 @@ class ExperimentBrowser(param.Parameterized):
                     disabled=True,
                     show_index=False,
                     pagination='local',
-                    page_size=10
+                    page_size=10,
+                    text_align='left',
+                    configuration={
+                        'rowHeight': 28,
+                    },
+                    styles={'font-size': '11px'}
                 )
                 self.file_tabulator.param.watch(self._on_selection_change, 'selection')
             else:
@@ -1230,7 +1236,7 @@ class ExperimentBrowser(param.Parameterized):
 
         return pn.Column(*panels)
 
-    @pn.depends('selected_datasets', 'x_start', 'x_end', 'downsample_enabled', 'downsample_factor')
+    @pn.depends('selected_datasets', 'x_start', 'x_end')
     def _get_shape_info(self):
         """Get shape information display for chunked datasets."""
         shapes = self._get_chunked_shapes()
@@ -1242,7 +1248,7 @@ class ExperimentBrowser(param.Parameterized):
             )
         return pn.pane.Markdown("")
 
-    @pn.depends('selected_datasets', 'matplotlib_code', 'downsample_enabled')
+    @pn.depends('selected_datasets', 'matplotlib_code')
     def _get_plot_controls(self):
         """Create unified Plot panel with controls and code editor."""
         controls = []
@@ -1251,26 +1257,21 @@ class ExperimentBrowser(param.Parameterized):
             controls.append(pn.pane.Markdown("_Select datasets from files to plot_", styles={'color': '#888', 'font-style': 'italic'}))
             return pn.Column(*controls)
 
-        # Show selected datasets and their variable names
-        controls.append(pn.pane.Markdown("**Selected Datasets:**"))
+        # Build var_names for code hints
         var_names = []
         for file_path, dataset_key in self.selected_datasets:
             filename_stem = Path(file_path).stem
             var_name = f"{filename_stem}_{dataset_key}"
             var_names.append(var_name)
-            controls.append(pn.pane.Markdown(f"- `{var_name}`"))
 
-        controls.append(pn.layout.Divider())
-
-        # Chunk range (applies to all datasets along dim 0)
-        controls.append(pn.pane.Markdown("**Chunk Range** _(dim 0)_"))
+        # Chunk range (inline label + slider)
         chunk_slider = pn.widgets.RangeSlider(
             name="",
             start=0,
-            end=10000,  # Will be clamped per-dataset
+            end=10000,
             value=(self.x_start, self.x_end),
             step=1,
-            width=350
+            sizing_mode='stretch_width'
         )
 
         def update_chunk_range(event):
@@ -1278,26 +1279,22 @@ class ExperimentBrowser(param.Parameterized):
             self.plot_version += 1
 
         chunk_slider.param.watch(update_chunk_range, 'value')
-        controls.append(chunk_slider)
-        
-        # Show chunked shapes
-        controls.append(self._get_shape_info)
 
-        # Downsampling
         controls.append(pn.Row(
-            pn.widgets.Checkbox.from_param(self.param.downsample_enabled, name="Downsample"),
-            pn.widgets.IntSlider.from_param(
-                self.param.downsample_factor,
-                name="step",
-                width=150
-            ) if self.downsample_enabled else pn.pane.Markdown("")
+            pn.pane.Markdown("**Chunk:**", styles={'margin-right': '8px', 'white-space': 'nowrap'}),
+            chunk_slider,
+            align='center',
+            sizing_mode='stretch_width'
         ))
+
+        # Show chunked shapes
+        controls.append(pn.panel(self._get_shape_info))
 
         controls.append(pn.layout.Divider())
 
         # Code editor with variable hints
         vars_hint = ", ".join([f"`{v}`" for v in var_names])
-        controls.append(pn.pane.Markdown(f"**Code** _(vars: {vars_hint}, `plt`, `np`)_"))
+        controls.append(pn.pane.Markdown(f"**Code** _(vars: {vars_hint}, `plt`, `np`)_", styles={'font-size': '12px'}))
 
         # Generate code with variable comments
         def get_code_with_vars():
@@ -1329,10 +1326,8 @@ class ExperimentBrowser(param.Parameterized):
         )
 
         def on_code_change(event):
-            code = event.new
-            # Store the code as-is (with comments if user includes them)
-            self.matplotlib_code = code
-            self.plot_version += 1
+            # Store code without triggering plot update (Run button does that)
+            self.matplotlib_code = event.new
 
         code_editor.param.watch(on_code_change, 'value')
         controls.append(code_editor)
@@ -1346,43 +1341,48 @@ class ExperimentBrowser(param.Parameterized):
 
         return pn.Column(*controls, sizing_mode='stretch_width')
 
+    def _get_full_shape(self, file_path, dataset_key):
+        """Get full shape of a dataset, using cache to avoid repeated file I/O."""
+        cache_key = (file_path, dataset_key)
+        if cache_key not in self._shape_cache:
+            try:
+                with h5py.File(file_path, 'r') as h5file:
+                    if dataset_key in h5file:
+                        self._shape_cache[cache_key] = h5file[dataset_key].shape
+                    else:
+                        return None
+            except Exception:
+                return None
+        return self._shape_cache.get(cache_key)
+
     def _get_chunked_shapes(self):
         """
         Get expected shapes after chunking for selected datasets.
-        
+
         Returns:
             dict mapping var_name to shape tuple, or None if error
         """
         shapes = {}
         for file_path, dataset_key in self.selected_datasets:
-            try:
-                filename_stem = Path(file_path).stem
-                var_name = f"{filename_stem}_{dataset_key}"
-                
-                with h5py.File(file_path, 'r') as h5file:
-                    if dataset_key not in h5file:
-                        return None
-                    ds = h5file[dataset_key]
-                    shape = ds.shape
-                    total_size = shape[0] if shape else 0
-                    
-                    # Calculate chunked shape
-                    x_start = min(self.x_start, total_size)
-                    x_end = min(self.x_end, total_size)
-                    
-                    if self.downsample_enabled:
-                        chunked_len = len(range(x_start, x_end, self.downsample_factor))
-                    else:
-                        chunked_len = x_end - x_start
-                    
-                    if len(shape) == 1:
-                        chunked_shape = (chunked_len,)
-                    else:
-                        chunked_shape = (chunked_len,) + shape[1:]
-                    
-                    shapes[var_name] = chunked_shape
-            except Exception:
+            filename_stem = Path(file_path).stem
+            var_name = f"{filename_stem}_{dataset_key}"
+
+            full_shape = self._get_full_shape(file_path, dataset_key)
+            if full_shape is None:
                 return None
+
+            total_size = full_shape[0] if full_shape else 0
+            x_start = min(self.x_start, total_size)
+            x_end = min(self.x_end, total_size)
+            chunked_len = x_end - x_start
+
+            if len(full_shape) == 1:
+                chunked_shape = (chunked_len,)
+            else:
+                chunked_shape = (chunked_len,) + full_shape[1:]
+
+            shapes[var_name] = chunked_shape
+
         return shapes
 
     def _load_selected_datasets(self):
@@ -1411,12 +1411,7 @@ class ExperimentBrowser(param.Parameterized):
                     # Apply chunking along dim 0
                     x_start = min(self.x_start, total_size)
                     x_end = min(self.x_end, total_size)
-
-                    if self.downsample_enabled:
-                        step = self.downsample_factor
-                        data = ds[x_start:x_end:step]
-                    else:
-                        data = ds[x_start:x_end]
+                    data = ds[x_start:x_end]
 
                     datasets[var_name] = np.asarray(data)
 
@@ -1517,8 +1512,7 @@ class ExperimentBrowser(param.Parameterized):
         except Exception as e:
             return pn.pane.Alert(f"**Error:** {str(e)}", alert_type="danger")
 
-    @pn.depends('selected_datasets', 'x_start', 'x_end',
-                'downsample_enabled', 'downsample_factor', 'plot_version', 'matplotlib_code')
+    @pn.depends('selected_datasets', 'x_start', 'x_end', 'plot_version')
     def _get_plot_panel(self):
         """Create plot visualization from selected datasets."""
         if not self.selected_datasets:
