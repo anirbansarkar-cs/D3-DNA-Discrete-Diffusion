@@ -965,10 +965,25 @@ class ExperimentBrowser(param.Parameterized):
                 self.selected_file_ids = []
 
     def _remove_file_from_selection(self, file_id):
-        """Remove a file from the selection."""
+        """Remove a file from the selection and unselect its datasets."""
         if file_id in self.selected_file_ids:
+            # Get file path before removing from selection
+            metadata = get_file_metadata(file_id)
+            file_path = metadata['path'] if metadata else None
+            
             new_selection = [fid for fid in self.selected_file_ids if fid != file_id]
             self.selected_file_ids = new_selection
+            
+            # Remove all datasets from this file from selected_datasets
+            if file_path:
+                updated_datasets = [
+                    (fp, dk) for fp, dk in self.selected_datasets 
+                    if fp != file_path
+                ]
+                if len(updated_datasets) != len(self.selected_datasets):
+                    self.selected_datasets = updated_datasets
+                    self.plot_version += 1
+            
             # Also update the tabulator selection if possible
             if hasattr(self, 'file_tabulator') and self.file_tabulator is not None:
                 if hasattr(self, '_current_df') and not self._current_df.empty:
