@@ -36,11 +36,31 @@ This will:
 
 ### 2. Launch the Browser
 
+**Local machine:**
 ```bash
 panel serve browser.py
 ```
-
 Open http://localhost:5006/browser in your web browser.
+
+**Remote server (SSH tunnel):**
+
+1. On the remote server, start the browser:
+```bash
+cd index_experiments
+panel serve browser.py --port 5006 --allow-websocket-origin="*"
+```
+
+2. On your local machine, create an SSH tunnel:
+```bash
+ssh -N -L 5006:localhost:5006 user@remote-server
+```
+
+3. Open http://localhost:5006/browser in your local browser.
+
+**Alternative: Single command with SSH tunnel**
+```bash
+ssh -L 5006:localhost:5006 user@remote-server "cd /path/to/index_experiments && panel serve browser.py --port 5006"
+```
 
 ## Usage
 
