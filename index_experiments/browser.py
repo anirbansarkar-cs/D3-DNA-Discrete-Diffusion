@@ -1511,23 +1511,21 @@ class ExperimentBrowser(param.Parameterized):
                 buf.seek(0)
                 png_data = buf.getvalue()
 
-                # Each figure in its own column with label
-                fig_column = pn.Column(
-                    pn.pane.Markdown(f"**Fig {i + 1}**", styles={'font-size': '11px', 'margin': '0 0 5px 0'}) if len(captured_figures) > 1 else None,
-                    pn.pane.PNG(png_data, height=400),
-                    width=500,
-                    styles={'flex-shrink': '0'}
-                )
-                figure_panes.append(fig_column)
+                # Each figure as PNG with label
+                if len(captured_figures) > 1:
+                    label = pn.pane.Markdown(f"**Fig {i + 1}**", styles={'font-size': '11px', 'margin': '0'})
+                    fig_pane = pn.Column(label, pn.pane.PNG(png_data), margin=(0, 15, 0, 0))
+                else:
+                    fig_pane = pn.pane.PNG(png_data)
+                figure_panes.append(fig_pane)
 
             plt.close('all')
 
-            # Horizontal layout with scrolling
-            return pn.Row(
-                *figure_panes,
-                sizing_mode='stretch_width',
-                styles={'overflow-x': 'auto', 'overflow-y': 'hidden', 'flex-wrap': 'nowrap'}
-            )
+            # Horizontal scrollable container
+            if len(captured_figures) > 1:
+                return pn.Row(*figure_panes, scroll=True, sizing_mode='stretch_width')
+            else:
+                return pn.Column(*figure_panes, sizing_mode='stretch_width')
 
         except SyntaxError as e:
             return pn.pane.Alert(f"**Syntax Error:** {str(e)}", alert_type="danger")
@@ -1609,14 +1607,15 @@ class ExperimentBrowser(param.Parameterized):
         visualization_card = pn.Column(
             pn.pane.Markdown("### Visualization", styles={'margin': '0 0 10px 0'}),
             pn.panel(self._get_plot_panel),
-            sizing_mode='stretch_both',
-            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px'}
+            sizing_mode='stretch_width',
+            styles={'background': '#f8f9fa', 'padding': '15px', 'border-radius': '8px', 'overflow-x': 'auto'}
         )
 
         right_column = pn.Column(
             plot_controls_card,
             visualization_card,
-            sizing_mode='stretch_both'
+            sizing_mode='stretch_both',
+            scroll=True
         )
 
         # Create row layout with fixed left sidebar and flexible right content
