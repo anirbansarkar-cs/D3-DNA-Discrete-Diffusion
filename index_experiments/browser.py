@@ -943,6 +943,10 @@ class ExperimentBrowser(param.Parameterized):
             search_text=search_text
         )
 
+        # Store summary info
+        self._total_files = len(df)
+        self._total_size = df['size'].sum() if not df.empty else 0
+
         # Prepare display dataframe
         if not df.empty:
             display_df = df[['filename', 'owner', 'size', 'modified']].copy()
@@ -951,12 +955,9 @@ class ExperimentBrowser(param.Parameterized):
 
             # Store original df for ID lookup
             self._current_df = df
-            # Store summary info
-            self._total_files = len(df)
-            self._total_size = df['size'].sum()
 
-            # Create or update tabulator
-            if self.file_tabulator is None:
+            # Create or update tabulator (check if it's a Tabulator widget, not a Markdown pane)
+            if self.file_tabulator is None or not isinstance(self.file_tabulator, pn.widgets.Tabulator):
                 self.file_tabulator = pn.widgets.Tabulator(
                     display_df,
                     selectable='checkbox',
@@ -973,16 +974,33 @@ class ExperimentBrowser(param.Parameterized):
                 )
                 self.file_tabulator.param.watch(self._on_selection_change, 'selection')
             else:
+                # Update existing tabulator with new data
                 self.file_tabulator.value = display_df
         else:
             self._current_df = pd.DataFrame()
-            self._total_files = 0
-            self._total_size = 0
-            if self.file_tabulator is None:
-                self.file_tabulator = pn.pane.Markdown("No files match the current filters.")
+            # Create empty dataframe with same columns for tabulator
+            empty_df = pd.DataFrame(columns=['filename', 'owner', 'size', 'modified'])
+            
+            # Create or update tabulator (check if it's a Tabulator widget, not a Markdown pane)
+            if self.file_tabulator is None or not isinstance(self.file_tabulator, pn.widgets.Tabulator):
+                self.file_tabulator = pn.widgets.Tabulator(
+                    empty_df,
+                    selectable='checkbox',
+                    height=350,
+                    disabled=True,
+                    show_index=False,
+                    pagination='local',
+                    page_size=10,
+                    text_align='left',
+                    configuration={
+                        'rowHeight': 28,
+                    },
+                    styles={'font-size': '11px'}
+                )
+                self.file_tabulator.param.watch(self._on_selection_change, 'selection')
             else:
-                # Replace with message
-                self.file_tabulator = pn.pane.Markdown("No files match the current filters.")
+                # Update existing tabulator with empty dataframe
+                self.file_tabulator.value = empty_df
 
     def _remove_datasets_for_unselected_files(self, new_file_ids):
         """Remove datasets from files that are no longer in the selection."""
