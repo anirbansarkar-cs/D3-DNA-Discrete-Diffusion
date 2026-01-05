@@ -1467,9 +1467,17 @@ class ExperimentBrowser(param.Parameterized):
             # Use chunk_dim, defaulting to 0 if dim exceeds shape
             effective_dim = min(dim, len(full_shape) - 1)
             total_size = full_shape[effective_dim] if full_shape else 0
-            x_start = min(self.x_start, total_size)
-            x_end = min(self.x_end, total_size)
-            chunked_len = x_end - x_start
+            
+            # Clamp to actual dimension size to prevent extending beyond bounds
+            x_start = max(0, min(self.x_start, total_size))
+            x_end = max(0, min(self.x_end, total_size))
+            
+            # Ensure x_start <= x_end
+            if x_start >= x_end:
+                x_end = min(x_start + 1, total_size)
+                x_start = max(0, x_end - 1)
+            
+            chunked_len = max(0, x_end - x_start)
 
             # Build chunked shape with the chunked dimension replaced
             chunked_shape = list(full_shape)
@@ -1506,8 +1514,14 @@ class ExperimentBrowser(param.Parameterized):
                     total_size = shape[effective_dim] if shape else 0
 
                     # Apply chunking along selected dimension
-                    x_start = min(self.x_start, total_size)
-                    x_end = min(self.x_end, total_size)
+                    # Clamp to actual dimension size to prevent extending beyond bounds
+                    x_start = max(0, min(self.x_start, total_size))
+                    x_end = max(0, min(self.x_end, total_size))
+                    
+                    # Ensure x_start <= x_end
+                    if x_start >= x_end:
+                        x_end = min(x_start + 1, total_size)
+                        x_start = max(0, x_end - 1)
 
                     # Build slice tuple for the selected dimension
                     slices = [slice(None)] * len(shape)
