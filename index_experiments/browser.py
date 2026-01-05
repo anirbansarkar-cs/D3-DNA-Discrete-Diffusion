@@ -1552,8 +1552,14 @@ class ExperimentBrowser(param.Parameterized):
             # Custom show function that captures the current figure
             def custom_show():
                 fig = plt.gcf()
-                if fig.get_axes():  # Only capture if figure has content
-                    captured_figures.append(fig)
+                # Check if figure has axes with actual content (artists/data)
+                if fig.get_axes():
+                    has_content = any(
+                        ax.has_data() or len(ax.patches) > 0 or len(ax.lines) > 0 or len(ax.collections) > 0
+                        for ax in fig.get_axes()
+                    )
+                    if has_content:
+                        captured_figures.append(fig)
                     # Create a new figure for subsequent plots
                     plt.figure()
 
@@ -1587,7 +1593,13 @@ class ExperimentBrowser(param.Parameterized):
             # Also capture any remaining figure that wasn't show()'d
             remaining_fig = plt.gcf()
             if remaining_fig.get_axes() and remaining_fig not in captured_figures:
-                captured_figures.append(remaining_fig)
+                # Check if axes have actual content
+                has_content = any(
+                    ax.has_data() or len(ax.patches) > 0 or len(ax.lines) > 0 or len(ax.collections) > 0
+                    for ax in remaining_fig.get_axes()
+                )
+                if has_content:
+                    captured_figures.append(remaining_fig)
 
             # If no figures were captured via show(), fall back to getting all figures
             if not captured_figures:
@@ -1595,7 +1607,13 @@ class ExperimentBrowser(param.Parameterized):
                 for fig_num in fig_nums:
                     fig = plt.figure(fig_num)
                     if fig.get_axes():
-                        captured_figures.append(fig)
+                        # Check if axes have actual content
+                        has_content = any(
+                            ax.has_data() or len(ax.patches) > 0 or len(ax.lines) > 0 or len(ax.collections) > 0
+                            for ax in fig.get_axes()
+                        )
+                        if has_content:
+                            captured_figures.append(fig)
 
             # Build output panes
             output_panes = []
