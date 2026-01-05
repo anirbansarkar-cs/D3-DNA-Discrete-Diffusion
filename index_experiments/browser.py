@@ -1468,16 +1468,19 @@ class ExperimentBrowser(param.Parameterized):
             effective_dim = min(dim, len(full_shape) - 1)
             total_size = full_shape[effective_dim] if full_shape else 0
             
-            # Clamp to actual dimension size to prevent extending beyond bounds
-            x_start = max(0, min(self.x_start, total_size))
-            x_end = max(0, min(self.x_end, total_size))
-            
-            # Ensure x_start <= x_end
-            if x_start >= x_end:
-                x_end = min(x_start + 1, total_size)
-                x_start = max(0, x_end - 1)
-            
-            chunked_len = max(0, x_end - x_start)
+            # Principle: chunk range can only CUT a dimension, never extend it
+            # If range exceeds dimension, use FULL dimension
+            if self.x_start >= total_size:
+                # Range is entirely beyond this dimension - use full dimension
+                x_start = 0
+                x_end = total_size
+            else:
+                x_start = max(0, self.x_start)
+                x_end = min(self.x_end, total_size)
+                if x_end <= x_start:
+                    x_end = total_size
+
+            chunked_len = x_end - x_start
 
             # Build chunked shape with the chunked dimension replaced
             chunked_shape = list(full_shape)
@@ -1514,14 +1517,17 @@ class ExperimentBrowser(param.Parameterized):
                     total_size = shape[effective_dim] if shape else 0
 
                     # Apply chunking along selected dimension
-                    # Clamp to actual dimension size to prevent extending beyond bounds
-                    x_start = max(0, min(self.x_start, total_size))
-                    x_end = max(0, min(self.x_end, total_size))
-                    
-                    # Ensure x_start <= x_end
-                    if x_start >= x_end:
-                        x_end = min(x_start + 1, total_size)
-                        x_start = max(0, x_end - 1)
+                    # Principle: chunk range can only CUT a dimension, never extend it
+                    # If range exceeds dimension, use FULL dimension
+                    if self.x_start >= total_size:
+                        # Range is entirely beyond this dimension - use full dimension
+                        x_start = 0
+                        x_end = total_size
+                    else:
+                        x_start = max(0, self.x_start)
+                        x_end = min(self.x_end, total_size)
+                        if x_end <= x_start:
+                            x_end = total_size
 
                     # Build slice tuple for the selected dimension
                     slices = [slice(None)] * len(shape)
