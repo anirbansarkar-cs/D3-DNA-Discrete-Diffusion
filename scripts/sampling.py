@@ -1,9 +1,12 @@
 import abc
 import torch
 import torch.nn.functional as F
+from typing import List, Optional, Union
+from pathlib import Path
 from utils.catsample import sample_categorical
 
 from utils.utils import get_score_fn
+from utils.inpainting import InpaintingManager, load_inpainting_data
 
 _PREDICTORS = {}
 
@@ -135,7 +138,9 @@ class Denoiser:
         return sample_categorical(probs)
                        
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_timestep=0):
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_timestep=0,
+                    inpainting_manager: Optional[InpaintingManager] = None,
+                    sequence_names: Optional[List[int]] = None):
 
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
@@ -145,16 +150,28 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_time
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
                                  device=device,
-                                 start_at_timestep=start_at_timestep)
+                                 start_at_timestep=start_at_timestep,
+                                 inpainting_manager=inpainting_manager,
+                                 sequence_names=sequence_names)
 
     return sampling_fn
     
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None, start_at_timestep=0):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None, start_at_timestep=0,
+                   inpainting_manager: Optional[InpaintingManager] = None,
+                   sequence_names: Optional[List[int]] = None):
     # we have always use euler predictor, but there's also analytic
     predictor = get_predictor(predictor)(graph, noise)
-    projector = proj_fun
     denoiser = Denoiser(graph, noise)
+
+    # Set up projector: use inpainting if manager is provided, otherwise use proj_fun
+    if inpainting_manager is not None and sequence_names is not None:
+        projector = inpainting_manager.create_projection_function(
+            sequence_names=sequence_names,
+            batch_size=batch_dims[0]
+        )
+    else:
+        projector = proj_fun
 
     @torch.no_grad()
     def pc_sampler(model, labels):
