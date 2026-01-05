@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import h5py
 
@@ -21,6 +21,7 @@ sys.path.insert(0, str(project_root))
 # Import base framework and LentIMPRA-specific components
 from scripts.sample import BaseSampler, parse_base_args, main_sample
 from model_zoo.lentimpra.data import get_lentimpra_datasets
+from utils.inpainting import InpaintingManager, load_inpainting_data
 
 
 class LentIMPRASampler(BaseSampler):
@@ -65,6 +66,9 @@ def main():
     # LentIMPRA-specific custom initialization arguments
     parser.add_argument('--custom_inits_path', type=str, help='Path to a H5 file with sequences for custom initial conditions')
     parser.add_argument('--custom_inits_step', type=int, default=10, help='Step to use for custom initial conditions')
+    # Inpainting arguments
+    parser.add_argument('--inpainting_csv', type=str, help='Path to CSV file with pattern hits for inpainting (e.g., Dev_high_hits.csv)')
+    parser.add_argument('--pattern_csv', type=str, help='Path to CSV file mapping pattern names to DNA sequences')
     args = parser.parse_args()
 
     # TODO: unify save_elements with the save_rep and other functions in the BaseSampler class
@@ -146,6 +150,26 @@ def main():
         architecture = 'transformer_multi_class'
         print(f"Auto-detected multi-class model (signal_dim={signal_dim}), using architecture: {architecture}")
 
+    # Set up inpainting manager if requested
+    inpainting_manager = None
+    sequence_names = None
+    if args.inpainting_csv:
+        print(f"Loading inpainting constraints from {args.inpainting_csv}")
+        inpainting_manager = load_inpainting_data(
+            csv_path=args.inpainting_csv,
+            pattern_csv_path=args.pattern_csv,
+            device=sampler.device
+        )
+        # Get sequence names from the inpainting manager
+        # These should match the batch indices being sampled
+        available_sequences = inpainting_manager.get_unique_sequence_names()
+        if num_samples <= len(available_sequences):
+            sequence_names = available_sequences[:num_samples]
+        else:
+            # Cycle through available sequences if we need more samples
+            sequence_names = (available_sequences * ((num_samples // len(available_sequences)) + 1))[:num_samples]
+        print(f"Inpainting enabled for {len(sequence_names)} sequences with {len(available_sequences)} unique patterns")
+
     # Run sampling using PC sampler
     print(f"Loading LentIMPRA {architecture} model from {args.checkpoint}")
     result = sampler.sample_sequences_with_pc_sampler(
@@ -157,7 +181,9 @@ def main():
         conditioning_labels=conditioning_labels,
         save_elements_list=args.save_elements,
         initial_x=initial_x,
-        start_at_timestep=args.start_at_timestep
+        start_at_timestep=args.start_at_timestep,
+        inpainting_manager=inpainting_manager,
+        sequence_names=sequence_names
     )
 
     # Handle result using shared utility
