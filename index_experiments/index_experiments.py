@@ -6,7 +6,7 @@ from db import init_db
 from scan_file import scan_file
 
 DB_PATH = "experiments.db"
-ROOT_DIR = "/grid/koo/home/duran/D3-DNA-Discrete-Diffusion"
+ROOT_DIR = "/grid/koo/home/shared/d3/data/lentimpra/compare_run_lite"
 MAX_WORKERS = 6
 
 def get_known_files(conn):
