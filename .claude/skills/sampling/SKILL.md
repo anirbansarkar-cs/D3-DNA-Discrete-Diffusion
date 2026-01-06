@@ -22,6 +22,7 @@ Use when users need to:
 4. **Include WandB logging** - always enable with `--use_wandb` and provide descriptive project/run names unless explicitly indicated to NOT use wandb
 5. **Verify checkpoints exist** - Confirm checkpoint paths before submission
 6. **Specify architecture explicitly** - Always include `--architecture transformer` or `--architecture convolutional`
+8. **ALWAYS specify --output** - the directory to save the samples should be meaningful and informative
 
 ## Prerequisites Checklist
 **BEFORE any job launch, verify ALL items:**
