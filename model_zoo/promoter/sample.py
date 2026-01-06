@@ -110,6 +110,10 @@ def main():
     else:
         print("Sampling unconditionally (no conditioning labels)")
 
+    # Setup wandb if enabled
+    if args.use_wandb:
+        sampler.setup_wandb(args, config)
+
     print(f"Loading Promoter {args.architecture} model from {args.checkpoint}")
     result = sampler.sample_sequences_with_pc_sampler(
         checkpoint_path=args.checkpoint,
@@ -126,6 +130,19 @@ def main():
     )
 
     results.update(sampler.handle_saved_elements(saved_elements, args.output, 'promoter_samples'))
+
+    # Log to wandb if enabled
+    if sampler.wandb_enabled:
+        try:
+            sampler.log_to_wandb(
+                sequences=sequences,
+                activity_labels=conditioning_labels,
+                saved_elements=saved_elements
+            )
+        except Exception as e:
+            print(f"Warning: Error logging to wandb: {e}")
+        finally:
+            sampler.cleanup_wandb()
 
     print(f"\nPromoter Sampling Results:")
     print("=" * 40)
