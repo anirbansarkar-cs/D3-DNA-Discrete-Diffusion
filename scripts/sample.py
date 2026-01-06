@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 
 # Import the proper sampling functionality
 from scripts import sampling
+from utils.inpainting import InpaintingManager
 
 
 class BaseSampler:
@@ -37,10 +38,243 @@ class BaseSampler:
     def __init__(self, dataset_name: str):
         self.dataset_name = dataset_name
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
+
         # Default token to nucleotide mapping (can be overridden by subclasses)
         self.token_to_nucleotide = {0: 'A', 1: 'C', 2: 'G', 3: 'T'}
-        
+
+        # Wandb logging state
+        self.wandb_run = None
+        self.wandb_enabled = False
+
+    def setup_wandb(self, args, config: Optional[OmegaConf] = None):
+        """
+        Initialize wandb logging for sampling if enabled.
+
+        Args:
+            args: Parsed command line arguments containing wandb settings
+            config: Optional config object to log as wandb.config
+
+        Returns:
+            None (sets self.wandb_run and self.wandb_enabled)
+        """
+        if not args.use_wandb:
+            self.wandb_enabled = False
+            return
+
+        try:
+            import wandb
+        except ImportError:
+            print("Warning: wandb not installed. Install with: pip install wandb")
+            print("Continuing without wandb logging...")
+            self.wandb_enabled = False
+            return
+
+        # Set default project name if not provided
+        project = args.wandb_project or f"{self.dataset_name.lower()}-sampling"
+
+        # Set default run name if not provided
+        if args.wandb_name:
+            name = args.wandb_name
+        else:
+            # Auto-generate name: {architecture}_{steps}steps_{num_samples}samples
+            name = f"{args.architecture}_{args.steps}steps_{args.num_samples}samples"
+
+        # Prepare config dict
+        config_dict = {
+            'dataset': self.dataset_name,
+            'architecture': args.architecture,
+            'num_samples': args.num_samples,
+            'steps': args.steps,
+            'checkpoint': args.checkpoint,
+            'batch_size': args.batch_size,
+            'format': args.format,
+            'sequence_encoding': args.sequence_encoding,
+            'save_elements': args.save_elements,
+            'start_at_timestep': args.start_at_timestep,
+        }
+
+        # Add config object if provided
+        if config is not None:
+            config_dict['model_config'] = OmegaConf.to_container(config, resolve=True)
+
+        # Initialize wandb
+        try:
+            self.wandb_run = wandb.init(
+                project=project,
+                name=name,
+                entity=args.wandb_entity,
+                tags=args.wandb_tags,
+                config=config_dict,
+                job_type='sampling'
+            )
+            self.wandb_enabled = True
+            print(f"Wandb logging enabled: {project}/{name}")
+        except Exception as e:
+            print(f"Warning: Failed to initialize wandb: {e}")
+            print("Continuing without wandb logging...")
+            self.wandb_enabled = False
+
+    def log_to_wandb(self, sequences: Optional[torch.Tensor] = None,
+                     conditioning_labels: Optional[torch.Tensor] = None,
+                     saved_elements: Optional[Dict[str, torch.Tensor]] = None,
+                     representations: Optional[torch.Tensor] = None):
+        """
+        Log all sampling results to wandb at end of sampling.
+
+        Args:
+            sequences: Generated sequences (N, L) as indices
+            conditioning_labels: Conditioning labels used (N, signal_dim)
+            saved_elements: Dict of saved elements from PC sampler (N, L, T, 4)
+            representations: Hidden representations if saved (N, hidden_dim)
+
+        Returns:
+            None (logs to wandb)
+        """
+        if not self.wandb_enabled or self.wandb_run is None:
+            return
+
+        import wandb
+        import tempfile
+
+        print("Logging results to wandb...")
+
+        # 1. Log sequences as wandb.Table
+        if sequences is not None:
+            sequences_str = self.sequences_to_strings(sequences)
+
+            # Build table columns: [id, sequence, label_1, label_2, ...]
+            columns = ['id', 'sequence']
+            data = []
+
+            # Add conditioning label columns if available
+            num_signals = 0
+            if conditioning_labels is not None:
+                num_signals = conditioning_labels.shape[1]
+                for i in range(num_signals):
+                    columns.append(f'activity_label_{i}')
+
+            # Build table rows
+            for i, seq_str in enumerate(sequences_str):
+                row = [i, seq_str]
+                if conditioning_labels is not None:
+                    # Add label values for this sequence
+                    for j in range(num_signals):
+                        row.append(conditioning_labels[i, j].item())
+                data.append(row)
+
+            sequences_table = wandb.Table(columns=columns, data=data)
+            wandb.log({'sequences': sequences_table})
+            print(f"  Logged {len(sequences_str)} sequences to wandb.Table")
+
+            # 2. Log conditioning labels summary if available
+            if conditioning_labels is not None:
+                # Log as histogram for each signal dimension
+                for i in range(conditioning_labels.shape[1]):
+                    wandb.log({
+                        f'activity_label_{i}_distribution': wandb.Histogram(
+                            conditioning_labels[:, i].cpu().numpy()
+                        )
+                    })
+                print(f"  Logged activity label distributions ({conditioning_labels.shape[1]} signals)")
+
+            # 3. Log sequence statistics
+            self._log_sequence_statistics(sequences)
+
+        # 4. Log saved_elements as artifacts
+        if saved_elements:
+            for elem_name, elem_tensor in saved_elements.items():
+                # Create artifact for this element
+                artifact = wandb.Artifact(
+                    name=f'{elem_name}_{wandb.run.id}',
+                    type=f'sampling_{elem_name}',
+                    description=f'{elem_name} from PC sampling (shape: {elem_tensor.shape})'
+                )
+
+                # Save to temporary file and add to artifact
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False) as f:
+                    np.save(f.name, elem_tensor.numpy())
+                    artifact.add_file(f.name, name=f'{elem_name}.npy')
+                    temp_path = f.name
+
+                # Log artifact
+                wandb.log_artifact(artifact)
+
+                # Clean up temp file
+                os.remove(temp_path)
+
+                print(f"  Logged {elem_name} as artifact (shape: {elem_tensor.shape})")
+
+        # 5. Log representations as artifact if available
+        if representations is not None:
+            artifact = wandb.Artifact(
+                name=f'representations_{wandb.run.id}',
+                type='representations',
+                description=f'Hidden representations (shape: {representations.shape})'
+            )
+
+            # Save to temporary file and add to artifact
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.npy', delete=False) as f:
+                # Handle float8 conversion for HDF5 compatibility
+                if representations.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
+                    reps_numpy = representations.to(torch.float16).cpu().numpy()
+                else:
+                    reps_numpy = representations.cpu().numpy()
+                np.save(f.name, reps_numpy)
+                artifact.add_file(f.name, name='representations.npy')
+                temp_path = f.name
+
+            wandb.log_artifact(artifact)
+            os.remove(temp_path)
+
+            print(f"  Logged representations as artifact (shape: {representations.shape})")
+
+        print("Wandb logging completed!")
+
+    def _log_sequence_statistics(self, sequences: torch.Tensor):
+        """
+        Calculate and log sequence statistics (GC content, nucleotide distribution).
+
+        Args:
+            sequences: Generated sequences (N, L) as indices
+        """
+        if not self.wandb_enabled:
+            return
+
+        import wandb
+
+        # Convert to numpy for easier processing
+        seqs_np = sequences.cpu().numpy()
+
+        # Calculate nucleotide counts (0=A, 1=C, 2=G, 3=T)
+        nucleotide_counts = {}
+        for nuc_idx, nuc_name in self.token_to_nucleotide.items():
+            count = (seqs_np == nuc_idx).sum()
+            nucleotide_counts[f'nucleotide_{nuc_name}'] = int(count)
+
+        # Calculate GC content
+        total_bases = seqs_np.size
+        gc_count = nucleotide_counts.get('nucleotide_G', 0) + nucleotide_counts.get('nucleotide_C', 0)
+        gc_content = gc_count / total_bases if total_bases > 0 else 0
+
+        # Log statistics
+        wandb.log({
+            'gc_content': gc_content,
+            **nucleotide_counts,
+            'total_sequences': len(sequences),
+            'sequence_length': sequences.shape[1]
+        })
+
+        print(f"  Logged sequence statistics (GC content: {gc_content:.3f})")
+
+    def cleanup_wandb(self):
+        """Finish wandb run and cleanup."""
+        if self.wandb_enabled and self.wandb_run is not None:
+            import wandb
+            wandb.finish()
+            print("Wandb run finished")
+            self.wandb_run = None
+            self.wandb_enabled = False
+
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
         """
         Load model for the dataset. Must be implemented by subclasses.
@@ -121,7 +355,9 @@ class BaseSampler:
                                        sampling_batch_size: Optional[int] = None,
                                        save_elements_list: Optional[list] = None,
                                        initial_x: Optional[torch.Tensor] = None,
-                                       start_at_timestep: int = 0) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+                                       start_at_timestep: int = 0,
+                                       inpainting_manager: Optional[InpaintingManager] = None,
+                                       sequence_names: Optional[List[int]] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Sample sequences using the proper PC sampler with optional batching.
 
@@ -133,11 +369,14 @@ class BaseSampler:
             architecture: Architecture type
             conditioning_labels: Optional conditioning labels (if None, generates random)
             sampling_batch_size: Batch size for sampling (None = smart default: 256 for >512 samples)
+            save_elements_list: List of elements to save during sampling ('sequence', 'score', etc.)
             initial_x: Optional initial condition sequences (if None, uses graph.sample_limit())
             start_at_timestep: Start sampling at this timestep (delayed sampling, default 0)
+            inpainting_manager: Optional InpaintingManager for constraining positions during sampling
+            sequence_names: List of sequence indices for inpainting (required if inpainting_manager provided)
 
         Returns:
-            Sampled sequences tensor
+            Sampled sequences tensor, or tuple of (sequences, saved_elements) if save_elements_list provided
         """
         # Load model using dataset-specific method
         model, graph, noise = self.load_model(checkpoint_path, config, architecture)
@@ -159,7 +398,8 @@ class BaseSampler:
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (num_samples, sequence_length), 'analytic', steps,
                 device=self.device, save_elements_list=save_elements_list, initial_x=initial_x,
-                start_at_timestep=start_at_timestep
+                start_at_timestep=start_at_timestep,
+                inpainting_manager=inpainting_manager, sequence_names=sequence_names
             )
             result = sampling_fn(model, conditioning_labels.to(self.device))
             if isinstance(result, tuple):
@@ -209,11 +449,17 @@ class BaseSampler:
             if initial_x is not None:
                 batch_initial_x = initial_x[start_idx:end_idx]
 
+            # Get sequence names for this batch (for inpainting)
+            batch_sequence_names = None
+            if sequence_names is not None:
+                batch_sequence_names = sequence_names[start_idx:end_idx]
+
             # Create sampling function for this batch
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (current_batch_size, sequence_length),
                 'analytic', steps, device=self.device, save_elements_list=save_elements_list,
-                initial_x=batch_initial_x, start_at_timestep=start_at_timestep
+                initial_x=batch_initial_x, start_at_timestep=start_at_timestep,
+                inpainting_manager=inpainting_manager, sequence_names=batch_sequence_names
             )
 
             # Generate sequences for this batch
@@ -416,7 +662,8 @@ class BaseSampler:
     def sample_and_save(self, checkpoint_path: str, config: OmegaConf, num_samples: int, steps: int,
                        architecture: str = 'transformer', conditioning_labels: Optional[torch.Tensor] = None,
                        output_path: Optional[str] = None, format: str = 'npz',
-                       sampling_batch_size: Optional[int] = None, encoding: str = 'index') -> Dict[str, Any]:
+                       sampling_batch_size: Optional[int] = None, encoding: str = 'index',
+                       wandb_args=None) -> Dict[str, Any]:
         """
         Main sampling method - just samples and saves (no evaluation).
 
@@ -435,6 +682,10 @@ class BaseSampler:
         Returns:
             Dictionary of sampling results
         """
+        # Setup wandb if args provided
+        if wandb_args is not None:
+            self.setup_wandb(wandb_args, config)
+
         print(f"Sampling {num_samples} {self.dataset_name} sequences using PC sampler with {steps} steps...")
 
         # Sample sequences
@@ -459,13 +710,26 @@ class BaseSampler:
         self.save_sequences(sampled_sequences, output_path, format, encoding)
         results['output_path'] = output_path
 
+        # Log to wandb if enabled
+        if self.wandb_enabled:
+            try:
+                self.log_to_wandb(
+                    sequences=sampled_sequences,
+                    conditioning_labels=conditioning_labels
+                )
+            except Exception as e:
+                print(f"Warning: Error logging to wandb: {e}")
+            finally:
+                self.cleanup_wandb()
+
         return results
 
 
-    def save_representation(self, checkpoint_path: str, config: OmegaConf, 
-                              split: str = 'test', save_rep_timestamp: Optional[int] = None, 
+    def save_representation(self, checkpoint_path: str, config: OmegaConf,
+                              split: str = 'test', save_rep_timestamp: Optional[int] = None,
                               batch_size: Optional[int] = None, architecture: str = 'transformer',
-                              output_path: Optional[str] = None, format: str = 'npz') -> Dict[str, Any]:
+                              output_path: Optional[str] = None, format: str = 'npz',
+                              wandb_args=None) -> Dict[str, Any]:
         """
         Save the representation of the model at a given timestamp.
         
@@ -482,8 +746,12 @@ class BaseSampler:
         Returns:
             Dictionary of evaluation results including SP-MSE
         """
+        # Setup wandb if args provided
+        if wandb_args is not None:
+            self.setup_wandb(wandb_args, config)
+
         print(f"Saving representation of the model for {self.dataset_name} on {split} split...")
-        
+
         # Set default steps to sequence length if not provided
         if save_rep_timestamp is None:
             print(f"Using default timestamp: {save_rep_timestamp}")
@@ -559,6 +827,18 @@ class BaseSampler:
         results.update(save_results)
 
         print(f"Representation saved to: {output_path}")
+
+        # Log to wandb if enabled
+        if self.wandb_enabled:
+            try:
+                self.log_to_wandb(
+                    sequences=None,
+                    representations=all_representations
+                )
+            except Exception as e:
+                print(f"Warning: Error logging to wandb: {e}")
+            finally:
+                self.cleanup_wandb()
 
         return results
 
@@ -786,6 +1066,18 @@ def parse_base_args():
     parser.add_argument('--start_at_timestep', type=int, default=0,
                        help='Start sampling at this timestep (delayed sampling). Default is 0 (start from beginning).')
 
+    # Wandb logging arguments
+    parser.add_argument('--use_wandb', action='store_true', default=False,
+                       help='Enable Weights & Biases logging for sampling run')
+    parser.add_argument('--wandb_project', type=str, default=None,
+                       help='Wandb project name (default: {dataset_name}-sampling)')
+    parser.add_argument('--wandb_name', type=str, default=None,
+                       help='Wandb run name (default: auto-generated)')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                       help='Wandb entity/team name (optional)')
+    parser.add_argument('--wandb_tags', type=str, nargs='+', default=None,
+                       help='Wandb tags for the run (optional)')
+
     return parser
 
     # TODO: unify save elements and save rep
@@ -825,7 +1117,8 @@ def main_sample(sampler: BaseSampler, args):
                 batch_size=args.batch_size,
                 architecture=args.architecture,
                 output_path=args.output,
-                format=args.format
+                format=args.format,
+                wandb_args=args
             )
 
             # Print results
@@ -851,7 +1144,8 @@ def main_sample(sampler: BaseSampler, args):
         architecture=args.architecture,
         output_path=args.output,
         format=args.format,
-        encoding=args.sequence_encoding
+        encoding=args.sequence_encoding,
+        wandb_args=args
     )
     
     # Print results
