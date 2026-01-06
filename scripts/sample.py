@@ -24,7 +24,6 @@ from torch.utils.data import DataLoader
 
 # Import the proper sampling functionality
 from scripts import sampling
-from utils.inpainting import InpaintingManager
 
 
 class BaseSampler:
@@ -356,8 +355,8 @@ class BaseSampler:
                                        save_elements_list: Optional[list] = None,
                                        initial_x: Optional[torch.Tensor] = None,
                                        start_at_timestep: int = 0,
-                                       inpainting_manager: Optional[InpaintingManager] = None,
-                                       sequence_names: Optional[List[int]] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+                                       motif_mask: Optional[torch.Tensor] = None,
+                                       inpainting_mode: Optional[str] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Sample sequences using the proper PC sampler with optional batching.
 
@@ -372,8 +371,8 @@ class BaseSampler:
             save_elements_list: List of elements to save during sampling ('sequence', 'score', etc.)
             initial_x: Optional initial condition sequences (if None, uses graph.sample_limit())
             start_at_timestep: Start sampling at this timestep (delayed sampling, default 0)
-            inpainting_manager: Optional InpaintingManager for constraining positions during sampling
-            sequence_names: List of sequence indices for inpainting (required if inpainting_manager provided)
+            motif_mask: Optional motif position mask for inpainting (binary tensor of shape (seq_len,))
+            inpainting_mode: Inpainting mode ('motif' or 'not_motif', required if motif_mask provided)
 
         Returns:
             Sampled sequences tensor, or tuple of (sequences, saved_elements) if save_elements_list provided
@@ -399,7 +398,7 @@ class BaseSampler:
                 graph, noise, (num_samples, sequence_length), 'analytic', steps,
                 device=self.device, save_elements_list=save_elements_list, initial_x=initial_x,
                 start_at_timestep=start_at_timestep,
-                inpainting_manager=inpainting_manager, sequence_names=sequence_names
+                motif_mask=motif_mask, inpainting_mode=inpainting_mode
             )
             result = sampling_fn(model, conditioning_labels.to(self.device))
             if isinstance(result, tuple):
@@ -449,17 +448,12 @@ class BaseSampler:
             if initial_x is not None:
                 batch_initial_x = initial_x[start_idx:end_idx]
 
-            # Get sequence names for this batch (for inpainting)
-            batch_sequence_names = None
-            if sequence_names is not None:
-                batch_sequence_names = sequence_names[start_idx:end_idx]
-
             # Create sampling function for this batch
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (current_batch_size, sequence_length),
                 'analytic', steps, device=self.device, save_elements_list=save_elements_list,
                 initial_x=batch_initial_x, start_at_timestep=start_at_timestep,
-                inpainting_manager=inpainting_manager, sequence_names=batch_sequence_names
+                motif_mask=motif_mask, inpainting_mode=inpainting_mode
             )
 
             # Generate sequences for this batch

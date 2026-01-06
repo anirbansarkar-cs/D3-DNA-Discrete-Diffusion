@@ -21,7 +21,7 @@ sys.path.insert(0, str(project_root))
 # Import base framework and LentIMPRA-specific components
 from scripts.sample import BaseSampler, parse_base_args, main_sample
 from model_zoo.lentimpra.data import get_lentimpra_datasets
-from utils.inpainting import InpaintingManager, load_inpainting_data
+from utils.inpainting import load_motif_positions
 
 
 class LentIMPRASampler(BaseSampler):
@@ -67,8 +67,8 @@ def main():
     parser.add_argument('--custom_inits_path', type=str, help='Path to a H5 file with sequences for custom initial conditions')
     parser.add_argument('--custom_inits_step', type=int, default=10, help='Step to use for custom initial conditions')
     # Inpainting arguments
-    parser.add_argument('--inpainting_csv', type=str, help='Path to CSV file with pattern hits for inpainting (e.g., Dev_high_hits.csv)')
-    parser.add_argument('--pattern_csv', type=str, help='Path to CSV file mapping pattern names to DNA sequences')
+    parser.add_argument('--motif_csv', type=str, help='Path to CSV file with motif positions (columns: motif_name, start, end, strand)')
+    parser.add_argument('--inpainting_mode', type=str, choices=['motif', 'not_motif'], help='Inpainting mode: "motif" fixes motif positions, "not_motif" fixes non-motif positions')
     args = parser.parse_args()
 
     # TODO: unify save_elements with the save_rep and other functions in the BaseSampler class
@@ -150,25 +150,23 @@ def main():
         architecture = 'transformer_multi_class'
         print(f"Auto-detected multi-class model (signal_dim={signal_dim}), using architecture: {architecture}")
 
-    # Set up inpainting manager if requested
-    inpainting_manager = None
-    sequence_names = None
-    if args.inpainting_csv:
-        print(f"Loading inpainting constraints from {args.inpainting_csv}")
-        inpainting_manager = load_inpainting_data(
-            csv_path=args.inpainting_csv,
-            pattern_csv_path=args.pattern_csv,
+    # Set up inpainting if requested
+    motif_mask = None
+    inpainting_mode = None
+    if args.motif_csv:
+        if not args.inpainting_mode:
+            print("Error: --inpainting_mode is required when using --motif_csv")
+            return 1
+        print(f"Loading motif positions from {args.motif_csv}")
+        sequence_length = sampler.get_sequence_length(config)
+        motif_mask = load_motif_positions(
+            csv_path=args.motif_csv,
+            sequence_length=sequence_length,
             device=sampler.device
         )
-        # Get sequence names from the inpainting manager
-        # These should match the batch indices being sampled
-        available_sequences = inpainting_manager.get_unique_sequence_names()
-        if num_samples <= len(available_sequences):
-            sequence_names = available_sequences[:num_samples]
-        else:
-            # Cycle through available sequences if we need more samples
-            sequence_names = (available_sequences * ((num_samples // len(available_sequences)) + 1))[:num_samples]
-        print(f"Inpainting enabled for {len(sequence_names)} sequences with {len(available_sequences)} unique patterns")
+        inpainting_mode = args.inpainting_mode
+        num_motif_positions = motif_mask.sum().item()
+        print(f"Inpainting mode '{inpainting_mode}': {num_motif_positions}/{sequence_length} positions are motif sites")
 
     # Setup wandb if enabled
     if args.use_wandb:
@@ -186,8 +184,8 @@ def main():
         save_elements_list=args.save_elements,
         initial_x=initial_x,
         start_at_timestep=args.start_at_timestep,
-        inpainting_manager=inpainting_manager,
-        sequence_names=sequence_names
+        motif_mask=motif_mask,
+        inpainting_mode=inpainting_mode
     )
 
     # Handle result using shared utility

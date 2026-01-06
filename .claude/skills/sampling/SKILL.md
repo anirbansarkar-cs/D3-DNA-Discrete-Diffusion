@@ -142,7 +142,14 @@ SCRIPT=/Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/lenti
 **Multi-class activities:** `--k562_activity`, `--hepg2_activity`, `--wtc11_activity` (floats)
 **Unconditional sampling:** `--unconditional` (flag)
 **Custom initialization:** `--custom_inits_path` (H5 file path)
-**Inpainting:** `--inpainting_csv` + `--pattern_csv` (both required)
+**Inpainting:** `--motif_csv` (CSV with motif positions) + `--inpainting_mode` (either 'motif' or 'not_motif', both required)
+
+### Inpainting Modes
+
+**Requirements:**
+- Both `--motif_csv` and `--inpainting_mode` must be specified together
+- Requires `--initial_condition` (test/dinuc/custom) to provide initial values to fix
+- Without initial condition, inpainting has no effect (nothing to fix)
 
 ### WandB Logging
 **`--use_wandb`** (flag) - Enable WandB logging
@@ -277,12 +284,13 @@ When user asks for 'test run':
 3. Reduce samples per job (smaller `--num_samples`)
 4. Reduce steps (`--steps 100` instead of `--steps 500`)
 
-### Inpainting CSV Format Error
+### Inpainting Configuration Error
 **Fix:**
-1. Verify CSV file format matches expected structure
-2. Ensure BOTH `--pattern_csv` and `--inpainting_csv` paths provided
-3. Check pattern names match between CSV files
-4. Validate CSV readability: `head -n 5 /path/to/file.csv`
+1. Verify CSV file format matches expected structure (motif_name, start, end, strand)
+2. Ensure BOTH `--motif_csv` and `--inpainting_mode` are provided together
+3. Verify you're using `--initial_condition` (test/dinuc/custom) to provide initial values
+4. Validate CSV readability: `head -n 5 /path/to/motif.csv`
+5. Check that motif positions (start, end) are within sequence length bounds
 
 ## Script Storage
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from utils.catsample import sample_categorical
 
 from utils.utils import get_score_fn
-from utils.inpainting import InpaintingManager, load_inpainting_data
+from utils.inpainting import load_motif_positions, create_inpainting_projection
 
 _PREDICTORS = {}
 
@@ -139,8 +139,8 @@ class Denoiser:
                        
 
 def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_timestep=0,
-                    inpainting_manager: Optional[InpaintingManager] = None,
-                    sequence_names: Optional[List[int]] = None):
+                    motif_mask: Optional[torch.Tensor] = None,
+                    inpainting_mode: Optional[str] = None):
 
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
@@ -151,27 +151,18 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_time
                                  eps=eps,
                                  device=device,
                                  start_at_timestep=start_at_timestep,
-                                 inpainting_manager=inpainting_manager,
-                                 sequence_names=sequence_names)
+                                 motif_mask=motif_mask,
+                                 inpainting_mode=inpainting_mode)
 
     return sampling_fn
     
 
 def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None, start_at_timestep=0,
-                   inpainting_manager: Optional[InpaintingManager] = None,
-                   sequence_names: Optional[List[int]] = None):
+                   motif_mask: Optional[torch.Tensor] = None,
+                   inpainting_mode: Optional[str] = None):
     # we have always use euler predictor, but there's also analytic
     predictor = get_predictor(predictor)(graph, noise)
     denoiser = Denoiser(graph, noise)
-
-    # Set up projector: use inpainting if manager is provided, otherwise use proj_fun
-    if inpainting_manager is not None and sequence_names is not None:
-        projector = inpainting_manager.create_projection_function(
-            sequence_names=sequence_names,
-            batch_size=batch_dims[0]
-        )
-    else:
-        projector = proj_fun
 
     @torch.no_grad()
     def pc_sampler(model, labels):
@@ -182,6 +173,20 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
         else:
             # unless sample_limit() is implemented differently for another graph, this is always random
             x = graph.sample_limit(*batch_dims).to(device)
+
+        # Store initial state for inpainting
+        initial_state = x.clone()
+
+        # Set up projector: use inpainting if motif_mask and mode are provided, otherwise use proj_fun
+        if motif_mask is not None and inpainting_mode is not None:
+            projector = create_inpainting_projection(
+                initial_x=initial_state,
+                motif_mask=motif_mask,
+                mode=inpainting_mode
+            )
+        else:
+            projector = proj_fun
+
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
 
