@@ -1,9 +1,8 @@
-Here's the revised SKILL.md with clearer, more efficient instructions while preserving all variables:
+---
+name: sampler
 
-# D3 DNA Discrete Diffusion Sampling
-
-## Overview
-Launch and manage D3 (DNA Discrete Diffusion) sampling experiments on SLURM clusters. This skill handles job submission, WandB tracking, and result management for genomic datasets (LentiMPRA, DeepSTARR, Promoter).
+description: Launch and manage D3 (DNA Discrete Diffusion) sampling experiments on SLURM clusters. This skill handles job submission, WandB tracking, and result management for genomic datasets (LentiMPRA, DeepSTARR, Promoter).
+---
 
 ## When to Use This Skill
 Use when users need to:
