@@ -67,6 +67,10 @@ def main():
     else:
         print("Sampling unconditionally (no conditioning labels)")
 
+    # Setup wandb if enabled
+    if args.use_wandb:
+        sampler.setup_wandb(args, config)
+
     steps = args.steps if args.steps is not None else sampler.get_sequence_length(config)
 
     print(f"Loading ATAC-seq {args.architecture} model from {args.checkpoint}")
@@ -85,6 +89,19 @@ def main():
     )
 
     results.update(sampler.handle_saved_elements(saved_elements, args.output, 'atacseq_samples'))
+
+    # Log to wandb if enabled
+    if sampler.wandb_enabled:
+        try:
+            sampler.log_to_wandb(
+                sequences=sequences,
+                activity_labels=conditioning_labels,
+                saved_elements=saved_elements
+            )
+        except Exception as e:
+            print(f"Warning: Error logging to wandb: {e}")
+        finally:
+            sampler.cleanup_wandb()
 
     print(f"\nATAC-seq Sampling Results:")
     print("=" * 40)

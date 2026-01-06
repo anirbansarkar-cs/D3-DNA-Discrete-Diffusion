@@ -170,6 +170,10 @@ def main():
             sequence_names = (available_sequences * ((num_samples // len(available_sequences)) + 1))[:num_samples]
         print(f"Inpainting enabled for {len(sequence_names)} sequences with {len(available_sequences)} unique patterns")
 
+    # Setup wandb if enabled
+    if args.use_wandb:
+        sampler.setup_wandb(args, config)
+
     # Run sampling using PC sampler
     print(f"Loading LentIMPRA {architecture} model from {args.checkpoint}")
     result = sampler.sample_sequences_with_pc_sampler(
@@ -193,6 +197,19 @@ def main():
 
     # Save elements if requested using shared utility
     results.update(sampler.handle_saved_elements(saved_elements, args.output, 'lentimpra_samples'))
+
+    # Log to wandb if enabled
+    if sampler.wandb_enabled:
+        try:
+            sampler.log_to_wandb(
+                sequences=sequences,
+                activity_labels=conditioning_labels,
+                saved_elements=saved_elements
+            )
+        except Exception as e:
+            print(f"Warning: Error logging to wandb: {e}")
+        finally:
+            sampler.cleanup_wandb()
 
     # Print results
     print(f"\nLentiMPRA sampling complete. Results:")

@@ -120,6 +120,10 @@ def main():
     else:
         print("Sampling unconditionally (no conditioning labels)")
 
+    # Setup wandb if enabled
+    if args.use_wandb:
+        sampler.setup_wandb(args, config)
+
     steps = args.steps
     if steps is None:
         steps = sampler.get_sequence_length(config)
@@ -141,6 +145,19 @@ def main():
     )
 
     results.update(sampler.handle_saved_elements(saved_elements, args.output, 'deepstarr_samples'))
+
+    # Log to wandb if enabled
+    if sampler.wandb_enabled:
+        try:
+            sampler.log_to_wandb(
+                sequences=sequences,
+                activity_labels=conditioning_labels,
+                saved_elements=saved_elements
+            )
+        except Exception as e:
+            print(f"Warning: Error logging to wandb: {e}")
+        finally:
+            sampler.cleanup_wandb()
 
     print(f"\nDeepSTARR Sampling Results:")
     print("=" * 40)
