@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "deny": [
+      "FileRead(/Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/index_experiments/)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/skill-forced-eval-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+
