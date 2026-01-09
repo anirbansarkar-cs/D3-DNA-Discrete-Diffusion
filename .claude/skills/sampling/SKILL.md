@@ -12,7 +12,7 @@ Use when users need to:
 - Track results with WandB
 - Launch parallel sampling jobs
 - Perform conditional generation with specific activities
-- Run inpainting experiments with motif constraints
+- Generate sequences with motif-constrained inpainting (fix specific regions)
 
 ## Critical Directives
 
@@ -35,8 +35,8 @@ Use when users need to:
 ### ✅ Required Paths Exist
 - Checkpoint file exists at specified path
 - Data file exists if using `--data_path` (required for test set conditioning/representation saving)
+- Inpainting data file exists if using `--inpainting_mode` (requires `--inpainting_data`)
 - Custom initialization files exist if using `--custom_inits_path`
-- Inpainting CSV files exist if using `--inpainting_csv`
 - Output directory is writable
 
 ### ✅ WandB Configuration (if using)
@@ -137,19 +137,22 @@ SCRIPT=/Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/lenti
 ### Conditioning
 **`--use_test_set`** (flag) - Use test set labels from dataset as conditioning (requires `--data_path`)
 
+### Inpainting (Motif-Constrained Generation)
+**`--inpainting_mode`** (default: none) - Inpainting mode: `inpaint_motifs` (fix outside, generate inside), `inpaint_not_motifs` (fix inside, generate outside), or `none`
+**`--inpainting_data`** (required when inpainting) - Path to all_hits_combined.h5 containing sequences and position constraints
+**`--inpainting_seed`** (optional) - Random seed for choosing dev vs hk positions when both available
+
+**Notes:**
+- When inpainting mode is active, ignores `--num_samples` and generates all samples from h5 file
+- Uses `Y_target` values from h5 file for conditioning (ignores activity arguments)
+- Validates Y_target dimensions match dataset (e.g., 2 for DeepSTARR, 1 for Promoter)
+- Requires h5 file with: `X` (one-hot sequences), `Y_target` (activities), position data (`start_dev`, `end_dev`, `start_hk`, `end_hk`)
+
 ### LentiMPRA-Specific
 **Single-class activity:** `--activity` (float)
 **Multi-class activities:** `--k562_activity`, `--hepg2_activity`, `--wtc11_activity` (floats)
 **Unconditional sampling:** `--unconditional` (flag)
 **Custom initialization:** `--custom_inits_path` (H5 file path)
-**Inpainting:** `--motif_csv` (CSV with motif positions) + `--inpainting_mode` (either 'motif' or 'not_motif', both required)
-
-### Inpainting Modes
-
-**Requirements:**
-- Both `--motif_csv` and `--inpainting_mode` must be specified together
-- Requires `--initial_condition` (test/dinuc/custom) to provide initial values to fix
-- Without initial condition, inpainting has no effect (nothing to fix)
 
 ### WandB Logging
 **`--use_wandb`** (flag) - Enable WandB logging
@@ -232,7 +235,6 @@ These show:
 - WandB integration
 - Array job indexing
 - Conditional generation
-- Inpainting workflows
 
 ## WandB Best Practices
 
@@ -284,13 +286,19 @@ When user asks for 'test run':
 3. Reduce samples per job (smaller `--num_samples`)
 4. Reduce steps (`--steps 100` instead of `--steps 500`)
 
-### Inpainting Configuration Error
+### Inpainting Y_target Dimension Mismatch
+**Error:** `ValueError: Y_target dimension mismatch: expected 2, got 1`
+**Cause:** Using inpainting data file from wrong dataset (e.g., Promoter h5 with DeepSTARR sampler)
 **Fix:**
-1. Verify CSV file format matches expected structure (motif_name, start, end, strand)
-2. Ensure BOTH `--motif_csv` and `--inpainting_mode` are provided together
-3. Verify you're using `--initial_condition` (test/dinuc/custom) to provide initial values
-4. Validate CSV readability: `head -n 5 /path/to/motif.csv`
-5. Check that motif positions (start, end) are within sequence length bounds
+1. Verify inpainting data file matches dataset:
+   - DeepSTARR: expects signal_dim=2 (dev + hk activities)
+   - Promoter: expects signal_dim=1 (expression only)
+   - LentiMPRA: varies by experiment (check config)
+2. Use correct inpainting data file for your dataset
+
+### Missing Inpainting Data
+**Error:** `ValueError: data_file must be provided when using inpainting mode`
+**Fix:** Add `--inpainting_data` argument when using `--inpainting_mode inpaint_motifs` or `--inpainting_mode inpaint_not_motifs`
 
 ## Script Storage
 

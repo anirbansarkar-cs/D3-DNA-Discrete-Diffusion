@@ -355,8 +355,7 @@ class BaseSampler:
                                        save_elements_list: Optional[list] = None,
                                        initial_x: Optional[torch.Tensor] = None,
                                        start_at_timestep: int = 0,
-                                       motif_mask: Optional[torch.Tensor] = None,
-                                       inpainting_mode: Optional[str] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+                                       proj_fun=None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Sample sequences using the proper PC sampler with optional batching.
 
@@ -371,12 +370,13 @@ class BaseSampler:
             save_elements_list: List of elements to save during sampling ('sequence', 'score', etc.)
             initial_x: Optional initial condition sequences (if None, uses graph.sample_limit())
             start_at_timestep: Start sampling at this timestep (delayed sampling, default 0)
-            motif_mask: Optional motif position mask for inpainting (binary tensor of shape (seq_len,))
-            inpainting_mode: Inpainting mode ('motif' or 'not_motif', required if motif_mask provided)
+            proj_fun: Projection function for inpainting (defaults to identity if None)
 
         Returns:
             Sampled sequences tensor, or tuple of (sequences, saved_elements) if save_elements_list provided
         """
+        # Default to identity function if proj_fun not provided
+        proj_fun = proj_fun or (lambda x: x)
         # Load model using dataset-specific method
         model, graph, noise = self.load_model(checkpoint_path, config, architecture)
         model.eval()
@@ -397,8 +397,7 @@ class BaseSampler:
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (num_samples, sequence_length), 'analytic', steps,
                 device=self.device, save_elements_list=save_elements_list, initial_x=initial_x,
-                start_at_timestep=start_at_timestep,
-                motif_mask=motif_mask, inpainting_mode=inpainting_mode
+                start_at_timestep=start_at_timestep, proj_fun=proj_fun
             )
             result = sampling_fn(model, conditioning_labels.to(self.device))
             if isinstance(result, tuple):
@@ -452,8 +451,7 @@ class BaseSampler:
             sampling_fn = sampling.get_pc_sampler(
                 graph, noise, (current_batch_size, sequence_length),
                 'analytic', steps, device=self.device, save_elements_list=save_elements_list,
-                initial_x=batch_initial_x, start_at_timestep=start_at_timestep,
-                motif_mask=motif_mask, inpainting_mode=inpainting_mode
+                initial_x=batch_initial_x, start_at_timestep=start_at_timestep, proj_fun=proj_fun
             )
 
             # Generate sequences for this batch
@@ -1059,6 +1057,18 @@ def parse_base_args():
                             'Requires --data_path when using test or dinuc.')
     parser.add_argument('--start_at_timestep', type=int, default=0,
                        help='Start sampling at this timestep (delayed sampling). Default is 0 (start from beginning).')
+
+    # Inpainting arguments
+    parser.add_argument('--inpainting_mode', type=str, default='none',
+                       choices=['none', 'inpaint_motifs', 'inpaint_not_motifs'],
+                       help='Inpainting mode for constrained generation: '
+                            'inpaint_motifs (fix outside, generate inside motif regions), '
+                            'inpaint_not_motifs (fix inside, generate outside motif regions), '
+                            'or none (no inpainting)')
+    parser.add_argument('--inpainting_data', type=str, default=None,
+                       help='Path to all_hits_combined.h5 (required when inpainting_mode != none)')
+    parser.add_argument('--inpainting_seed', type=int, default=None,
+                       help='Random seed for choosing dev vs hk positions when both are available')
 
     # Wandb logging arguments
     parser.add_argument('--use_wandb', action='store_true', default=False,

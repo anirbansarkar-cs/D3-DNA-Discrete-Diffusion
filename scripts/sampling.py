@@ -6,7 +6,6 @@ from pathlib import Path
 from utils.catsample import sample_categorical
 
 from utils.utils import get_score_fn
-from utils.inpainting import load_motif_positions, create_inpainting_projection
 
 _PREDICTORS = {}
 
@@ -138,9 +137,7 @@ class Denoiser:
         return sample_categorical(probs)
                        
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_timestep=0,
-                    motif_mask: Optional[torch.Tensor] = None,
-                    inpainting_mode: Optional[str] = None):
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_timestep=0):
 
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
@@ -150,16 +147,12 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_time
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
                                  device=device,
-                                 start_at_timestep=start_at_timestep,
-                                 motif_mask=motif_mask,
-                                 inpainting_mode=inpainting_mode)
+                                 start_at_timestep=start_at_timestep)
 
     return sampling_fn
     
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None, start_at_timestep=0,
-                   motif_mask: Optional[torch.Tensor] = None,
-                   inpainting_mode: Optional[str] = None):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None, start_at_timestep=0):
     # we have always use euler predictor, but there's also analytic
     predictor = get_predictor(predictor)(graph, noise)
     denoiser = Denoiser(graph, noise)
@@ -173,19 +166,6 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
         else:
             # unless sample_limit() is implemented differently for another graph, this is always random
             x = graph.sample_limit(*batch_dims).to(device)
-
-        # Store initial state for inpainting
-        initial_state = x.clone()
-
-        # Set up projector: use inpainting if motif_mask and mode are provided, otherwise use proj_fun
-        if motif_mask is not None and inpainting_mode is not None:
-            projector = create_inpainting_projection(
-                initial_x=initial_state,
-                motif_mask=motif_mask,
-                mode=inpainting_mode
-            )
-        else:
-            projector = proj_fun
 
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
@@ -202,7 +182,7 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
 
         for i in range(start_at_timestep, steps):
             t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
-            x = projector(x)
+            x = proj_fun(x)
             # Create save_elements dict excluding 'sequence' (we'll save it separately after update)
             predictor_save_elements = {}
             if saved_elements:
@@ -219,7 +199,7 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
 
         if denoise:
             # denoising step
-            x = projector(x)
+            x = proj_fun(x)
             t = timesteps[-1] * torch.ones(x.shape[0], 1, device=device)
             # Create save_elements dict excluding 'sequence' (we'll save it separately after update)
             denoiser_save_elements = {}

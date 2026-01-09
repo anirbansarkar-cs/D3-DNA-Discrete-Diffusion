@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_root))
 from scripts.sample import BaseSampler, parse_base_args, main_sample
 from model_zoo.deepstarr.data import get_deepstarr_datasets
 from model_zoo.deepstarr.deepstarr import PL_DeepSTARR
+from utils.inpainting import create_inpainting_manager
 
 
 class DeepSTARRSampler(BaseSampler):
@@ -88,6 +89,15 @@ def main():
     )
     sampler = DeepSTARRSampler()
 
+    # Create inpainting manager if inpainting mode is specified
+    inpainting_mgr = create_inpainting_manager(
+        mode=args.inpainting_mode if args.inpainting_mode != 'none' else None,
+        data_file=args.inpainting_data,
+        device=sampler.device,
+        seed=args.inpainting_seed,
+        expected_signal_dim=config.dataset.signal_dim  # 2 for DeepSTARR
+    )
+
     if args.save_rep:
         print(f"Saving representation of the model to {args.data_path}")
         results = sampler.save_representation(
@@ -109,16 +119,26 @@ def main():
         print(f"\n✓ {sampler.dataset_name} saving representation completed successfully!")
         sys.exit(0)
 
-    conditioning_labels = None
-    if not args.unconditional:
-        if args.dev_activity is not None and args.hk_activity is not None:
-            conditioning_labels = torch.tensor([[args.dev_activity, args.hk_activity]], device=sampler.device).expand(args.num_samples, -1)
-            print(f"Using specified activities: Dev={args.dev_activity}, HK={args.hk_activity}")
-        else:
-            conditioning_labels = sampler.generate_conditioning_labels(args.num_samples, config)
-            print("Using random activities")
+    # Determine num_samples and conditioning labels based on inpainting mode
+    if inpainting_mgr:
+        num_samples_to_generate = inpainting_mgr.num_samples
+        all_labels = inpainting_mgr.Y_target  # (658, 2) - use real DeepSTARR values
+        print(f"Inpainting mode: {args.inpainting_mode}")
+        print(f"Generating {num_samples_to_generate} sequences with inpainting constraints")
+        print(f"Using Y_target values from inpainting data file")
     else:
-        print("Sampling unconditionally (no conditioning labels)")
+        num_samples_to_generate = args.num_samples
+        # Use regular conditioning logic
+        if not args.unconditional:
+            if args.dev_activity is not None and args.hk_activity is not None:
+                all_labels = torch.tensor([[args.dev_activity, args.hk_activity]], device=sampler.device).expand(num_samples_to_generate, -1)
+                print(f"Using specified activities: Dev={args.dev_activity}, HK={args.hk_activity}")
+            else:
+                all_labels = sampler.generate_conditioning_labels(num_samples_to_generate, config)
+                print("Using random activities")
+        else:
+            all_labels = None
+            print("Sampling unconditionally (no conditioning labels)")
 
     # Setup wandb if enabled
     if args.use_wandb:
@@ -129,16 +149,75 @@ def main():
         steps = sampler.get_sequence_length(config)
 
     print(f"Loading DeepSTARR {args.architecture} model from {args.checkpoint}")
-    result = sampler.sample_sequences_with_pc_sampler(
-        checkpoint_path=args.checkpoint,
-        config=config,
-        num_samples=args.num_samples,
-        steps=steps,
-        architecture=args.architecture,
-        conditioning_labels=conditioning_labels,
-        save_elements_list=args.save_elements,
-        start_at_timestep=args.start_at_timestep
-    )
+
+    # For inpainting, we need to batch and create proj_fun for each batch
+    if inpainting_mgr:
+        batch_size = args.batch_size or 256
+        all_sequences = []
+        all_saved_elements = {} if args.save_elements else None
+
+        if args.save_elements:
+            for elem in args.save_elements:
+                all_saved_elements[elem] = []
+
+        print(f"Processing {num_samples_to_generate} samples in batches of {batch_size}")
+
+        for start_idx in range(0, num_samples_to_generate, batch_size):
+            end_idx = min(start_idx + batch_size, num_samples_to_generate)
+            current_batch_size = end_idx - start_idx
+            batch_indices = np.arange(start_idx, end_idx)
+
+            # Get projection function and labels for this batch
+            proj_fun = inpainting_mgr.get_projection_fn(batch_indices)
+            batch_labels = all_labels[batch_indices]
+
+            print(f"  Batch {start_idx}-{end_idx} ({current_batch_size} samples)")
+
+            # Sample with inpainting constraints
+            batch_result = sampler.sample_sequences_with_pc_sampler(
+                checkpoint_path=args.checkpoint,
+                config=config,
+                num_samples=current_batch_size,
+                steps=steps,
+                architecture=args.architecture,
+                conditioning_labels=batch_labels,
+                save_elements_list=args.save_elements,
+                start_at_timestep=args.start_at_timestep,
+                proj_fun=proj_fun
+            )
+
+            # Handle batch results
+            if args.save_elements:
+                batch_seqs, batch_saved = batch_result
+                all_sequences.append(batch_seqs)
+                for elem in args.save_elements:
+                    if elem in batch_saved:
+                        all_saved_elements[elem].append(batch_saved[elem])
+            else:
+                all_sequences.append(batch_result)
+
+        # Concatenate all batches
+        sequences = torch.cat(all_sequences, dim=0)
+        if args.save_elements:
+            saved_elements = {elem: torch.cat(all_saved_elements[elem], dim=0) for elem in args.save_elements}
+            result = (sequences, saved_elements)
+        else:
+            result = sequences
+
+        conditioning_labels = all_labels  # For wandb logging
+    else:
+        # Regular sampling without inpainting
+        result = sampler.sample_sequences_with_pc_sampler(
+            checkpoint_path=args.checkpoint,
+            config=config,
+            num_samples=num_samples_to_generate,
+            steps=steps,
+            architecture=args.architecture,
+            conditioning_labels=all_labels,
+            save_elements_list=args.save_elements,
+            start_at_timestep=args.start_at_timestep
+        )
+        conditioning_labels = all_labels
 
     sequences, saved_elements, results = sampler.handle_sample_result(
         result, args.output, args.format, args.sequence_encoding
