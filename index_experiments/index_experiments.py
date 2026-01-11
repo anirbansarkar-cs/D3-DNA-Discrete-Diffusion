@@ -6,7 +6,7 @@ from db import init_db
 from scan_file import scan_file
 
 DB_PATH = "experiments.db"
-ROOT_DIR = "/grid/koo/home/shared/d3/data/lentimpra/compare_run_lite"
+ROOT_DIR = "/grid/koo/home/shared/d3/data/lentimpra/compare_run_lite/backward_steps128_eps1e-5_smin1e-4_smax20"
 MAX_WORKERS = 6
 
 def get_known_files(conn):
