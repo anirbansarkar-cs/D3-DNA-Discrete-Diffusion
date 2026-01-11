@@ -51,6 +51,7 @@ Use when users need to:
 ### ⚠️ Critical Settings
 - **SLURM time limit exceeds sampling time** - Default limits may be too short
 - **GPU resources match model requirements** - Verify GPU memory suffices for model + batch size
+- **ALWAYS request H100 GPUs** - Transformer models require bfloat16 support (use `--gres=gpu:h100:1`)
 - **Checkpoint compatibility** - Ensure checkpoint matches dataset and model architecture
 - **Architecture specification** - Always provide `--architecture` argument (transformer or convolutional per user indication)
 
@@ -178,7 +179,7 @@ SCRIPT=/Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/lenti
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:h100:1
 
 source ~/.bashrc
 mamba activate d3-new
@@ -200,7 +201,7 @@ python /path/to/sample.py \
 #SBATCH --time=HH:MM:SS
 #SBATCH --partition=gpuq
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:h100:1
 #SBATCH --mem=32G
 
 source ~/.bashrc
@@ -273,8 +274,12 @@ When user asks for 'test run':
 1. Reduce `--batch_size` (256 → 128 → 64)
 2. Reduce `--num_samples` per job, run multiple jobs
 3. Disable trajectory saving: omit `--save_elements score`
-4. Request more GPU memory: `#SBATCH --gres=gpu:a100:1`
-5. Verify architecture matches checkpoint
+4. Verify architecture matches checkpoint
+
+### bfloat16 Not Supported Error
+**Error:** `RuntimeError: Current CUDA Device does not support bfloat16`
+**Cause:** Transformer models require bfloat16 support (H100/A100 GPUs)
+**Fix:** Always use `#SBATCH --gres=gpu:h100:1` for transformer architecture jobs
 
 ### Missing Required Arguments
 **Error:** `error: the following arguments are required: --checkpoint, --architecture`
