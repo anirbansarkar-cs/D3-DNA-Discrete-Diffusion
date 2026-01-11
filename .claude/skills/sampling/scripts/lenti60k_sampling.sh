@@ -7,6 +7,7 @@
 ```bash
 #!/bin/bash
 #SBATCH --job-name=d3_lentimpra_multiactivity
+#SBATCH --partition=gpuq
 #SBATCH --output=/grid/koo/home/aduran/logs/%j.out
 #SBATCH --error=/grid/koo/home/aduran/logs/%j.err
 #SBATCH --time=04:00:00
@@ -15,7 +16,7 @@
 #SBATCH --mem=48G
 
 source ~/.bashrc
-mamba activate d3-old
+mamba activate d3-new
 
 python /Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/lentimpra/sample.py \
     --checkpoint /grid/koo/home/shared/d3/trained_weights/lentimpra_60k/model-epoch=299-val_loss=220.3063.ckpt \

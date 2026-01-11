@@ -150,6 +150,8 @@ def main():
 
     print(f"Loading DeepSTARR {args.architecture} model from {args.checkpoint}")
 
+    # TODO: reduce this code, can just do an if else to def the proj_fun and batch_labels
+
     # For inpainting, we need to batch and create proj_fun for each batch
     if inpainting_mgr:
         batch_size = args.batch_size or 256

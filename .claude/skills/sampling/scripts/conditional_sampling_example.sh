@@ -10,12 +10,13 @@
 #SBATCH --output=/grid/koo/home/aduran/logs/%j.out
 #SBATCH --error=/grid/koo/home/aduran/logs/%j.err
 #SBATCH --time=03:00:00
+#SBATCH --partition=gpuq
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 
 source ~/.bashrc
-mamba activate d3-old
+mamba activate d3-new
 
 python /Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/promoter/sample.py \
     --checkpoint /grid/koo/home/shared/d3/trained_weights/promoter_09242025/model-epoch=175-val_loss=1119.9065.ckpt \

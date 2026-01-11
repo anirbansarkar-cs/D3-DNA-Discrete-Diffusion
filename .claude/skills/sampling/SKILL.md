@@ -4,6 +4,9 @@ name: sampler
 description: Launch and manage D3 (DNA Discrete Diffusion) sampling experiments on SLURM clusters. This skill handles job submission, WandB tracking, and result management for genomic datasets (LentiMPRA, DeepSTARR, Promoter).
 ---
 
+# TODO: give it the elzar node configs - ask it to not request unnecessary cpus (add --partition) argument to scripts + this md
+# 
+
 ## When to Use This Skill
 Use when users need to:
 - Generate sequences from trained D3 diffusion models
@@ -29,7 +32,7 @@ Use when users need to:
 
 ### ✅ Environment Setup
 - SLURM cluster access configured
-- Conda environment `d3-old` exists with all dependencies
+- Conda environment `d3-new` exists with all dependencies
 - WandB authenticated (`wandb login`) if using `--use_wandb`
 
 ### ✅ Required Paths Exist
@@ -171,13 +174,14 @@ SCRIPT=/Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/lenti
 #SBATCH --error=/grid/koo/home/aduran/logs/%j.err
 #SBATCH --time=HH:MM:SS
 #SBATCH --nodes=1
+#SBATCH --partition=gpuq
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 
 source ~/.bashrc
-mamba activate d3-old
+mamba activate d3-new
 
 python /path/to/sample.py \
     --checkpoint <checkpoint_path> \
@@ -194,12 +198,13 @@ python /path/to/sample.py \
 #SBATCH --output=/grid/koo/home/aduran/logs/%A_%a.out
 #SBATCH --error=/grid/koo/home/aduran/logs/%A_%a.err
 #SBATCH --time=HH:MM:SS
+#SBATCH --partition=gpuq
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 
 source ~/.bashrc
-mamba activate d3-old
+mamba activate d3-new
 
 # Define parameter arrays
 STEPS=(50 100 200 500)
@@ -292,6 +297,7 @@ When user asks for 'test run':
 **Fix:**
 1. Verify inpainting data file matches dataset:
    - DeepSTARR: expects signal_dim=2 (dev + hk activities)
+   -- for DeepSTARR, use 
    - Promoter: expects signal_dim=1 (expression only)
    - LentiMPRA: varies by experiment (check config)
 2. Use correct inpainting data file for your dataset

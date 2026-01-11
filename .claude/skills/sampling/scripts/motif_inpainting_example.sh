@@ -13,10 +13,11 @@
 #SBATCH --time=03:00:00
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
+#SBATCH --partition=gpuq
 #SBATCH --mem=32G
 
 source ~/.bashrc
-mamba activate d3-old
+mamba activate d3-new
 
 # Inpaint motifs: fix positions OUTSIDE motif regions, generate INSIDE
 python /Users/alejandraduran/Documents/D3-DNA-Discrete-Diffusion/model_zoo/deepstarr/sample.py \
