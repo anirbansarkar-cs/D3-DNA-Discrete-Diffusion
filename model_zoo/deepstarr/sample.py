@@ -155,58 +155,107 @@ def main():
     # For inpainting, we need to batch and create proj_fun for each batch
     if inpainting_mgr:
         batch_size = args.batch_size or 256
-        all_sequences = []
-        all_saved_elements = {} if args.save_elements else None
+        num_iterations = args.inpainting_iterations
 
-        if args.save_elements:
-            for elem in args.save_elements:
-                all_saved_elements[elem] = []
+        # Store sequences per iteration: list of [iteration][sequences]
+        iterations_sequences = []
 
         print(f"Processing {num_samples_to_generate} samples in batches of {batch_size}")
+        print(f"Running {num_iterations} iteration(s) per sample")
 
-        for start_idx in range(0, num_samples_to_generate, batch_size):
-            end_idx = min(start_idx + batch_size, num_samples_to_generate)
-            current_batch_size = end_idx - start_idx
-            batch_indices = np.arange(start_idx, end_idx)
+        for iteration in range(num_iterations):
+            print(f"\n=== Iteration {iteration + 1}/{num_iterations} ===")
+            iteration_sequences = []
 
-            # Get projection function and labels for this batch
-            proj_fun = inpainting_mgr.get_projection_fn(batch_indices)
-            batch_labels = all_labels[batch_indices]
+            for start_idx in range(0, num_samples_to_generate, batch_size):
+                end_idx = min(start_idx + batch_size, num_samples_to_generate)
+                current_batch_size = end_idx - start_idx
+                batch_indices = np.arange(start_idx, end_idx)
 
-            print(f"  Batch {start_idx}-{end_idx} ({current_batch_size} samples)")
+                # Get projection function and labels for this batch
+                proj_fun = inpainting_mgr.get_projection_fn(batch_indices)
+                batch_labels = all_labels[batch_indices]
 
-            # Sample with inpainting constraints
-            batch_result = sampler.sample_sequences_with_pc_sampler(
-                checkpoint_path=args.checkpoint,
-                config=config,
-                num_samples=current_batch_size,
-                steps=steps,
-                architecture=args.architecture,
-                conditioning_labels=batch_labels,
-                save_elements_list=args.save_elements,
-                start_at_timestep=args.start_at_timestep,
-                proj_fun=proj_fun
-            )
+                print(f"  Batch {start_idx}-{end_idx} ({current_batch_size} samples)")
 
-            # Handle batch results
-            if args.save_elements:
-                batch_seqs, batch_saved = batch_result
-                all_sequences.append(batch_seqs)
-                for elem in args.save_elements:
-                    if elem in batch_saved:
-                        all_saved_elements[elem].append(batch_saved[elem])
-            else:
-                all_sequences.append(batch_result)
+                # Sample with inpainting constraints
+                batch_result = sampler.sample_sequences_with_pc_sampler(
+                    checkpoint_path=args.checkpoint,
+                    config=config,
+                    num_samples=current_batch_size,
+                    steps=steps,
+                    architecture=args.architecture,
+                    conditioning_labels=batch_labels,
+                    save_elements_list=None,  # Don't save elements for iterations
+                    start_at_timestep=args.start_at_timestep,
+                    proj_fun=proj_fun
+                )
 
-        # Concatenate all batches
-        sequences = torch.cat(all_sequences, dim=0)
-        if args.save_elements:
-            saved_elements = {elem: torch.cat(all_saved_elements[elem], dim=0) for elem in args.save_elements}
-            result = (sequences, saved_elements)
-        else:
-            result = sequences
+                iteration_sequences.append(batch_result)
 
+            # Concatenate batches for this iteration
+            iteration_seqs = torch.cat(iteration_sequences, dim=0)
+            iterations_sequences.append(iteration_seqs)
+
+        # Stack iterations: (num_samples, num_iterations, seq_len)
+        sequences = torch.stack(iterations_sequences, dim=1)
+        saved_elements = None
+        result = sequences
         conditioning_labels = all_labels  # For wandb logging
+
+        # Custom save for iterated inpainting results
+        if args.output:
+            output_path = args.output
+            print(f"\nSaving iterated inpainting results to {output_path}")
+            with h5py.File(output_path, 'w') as f:
+                # Save sequences with shape (num_samples, num_iterations, seq_len)
+                f.create_dataset('sequences', data=sequences.cpu().numpy())
+                # Save metadata from inpainting manager
+                f.create_dataset('Y_target', data=inpainting_mgr.Y_target.cpu().numpy())
+                f.create_dataset('X_original', data=inpainting_mgr.X.cpu().numpy())
+                # Save position data
+                f.create_dataset('start_dev', data=inpainting_mgr.start_dev)
+                f.create_dataset('end_dev', data=inpainting_mgr.end_dev)
+                f.create_dataset('start_hk', data=inpainting_mgr.start_hk)
+                f.create_dataset('end_hk', data=inpainting_mgr.end_hk)
+                # Save sampling config as attributes
+                f.attrs['num_samples'] = num_samples_to_generate
+                f.attrs['num_iterations'] = num_iterations
+                f.attrs['steps'] = steps
+                f.attrs['inpainting_mode'] = args.inpainting_mode
+            print(f"Saved: sequences shape {sequences.shape} (samples, iterations, seq_len)")
+
+            # Skip the normal handle_sample_result since we already saved
+            results = {
+                'num_sequences': num_samples_to_generate,
+                'num_iterations': num_iterations,
+                'sequence_length': sequences.shape[-1],
+                'output_file': output_path,
+                'encoding': 'index'
+            }
+
+            # Log to wandb if enabled
+            if sampler.wandb_enabled:
+                try:
+                    # Reshape for wandb: flatten iterations
+                    flat_seqs = sequences.reshape(-1, sequences.shape[-1])
+                    sampler.log_to_wandb(
+                        sequences=flat_seqs,
+                        conditioning_labels=conditioning_labels.repeat_interleave(num_iterations, dim=0) if conditioning_labels is not None else None,
+                        saved_elements=None
+                    )
+                except Exception as e:
+                    print(f"Warning: Error logging to wandb: {e}")
+                finally:
+                    sampler.cleanup_wandb()
+
+            print(f"\nDeepSTARR Sampling Results:")
+            print("=" * 40)
+            for key, value in results.items():
+                print(f"{key}: {value}")
+
+            print(f"\n✓ DeepSTARR inpainting sampling completed successfully!")
+            return 0
     else:
         # Regular sampling without inpainting
         result = sampler.sample_sequences_with_pc_sampler(
@@ -232,7 +281,7 @@ def main():
         try:
             sampler.log_to_wandb(
                 sequences=sequences,
-                activity_labels=conditioning_labels,
+                conditioning_labels=conditioning_labels,
                 saved_elements=saved_elements
             )
         except Exception as e:

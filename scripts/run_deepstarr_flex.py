@@ -30,26 +30,24 @@ class PL_DeepSTARR(pl.LightningModule):
         print("shape before flattening", x.shape)
 
         # flatten (samples, iterations, length) -> (samples*iterations, length)
-        x = x.reshape(-1, x.shape[-1])
+        num_samples, num_iterations, seq_length = x.shape
+        x = x.reshape(-1, seq_length)
         print("shape after flattening", x.shape)
 
-        # flatten y to match sequences
-        if len(y.shape) > 1 and y.shape[0] == x.shape[0] // x.shape[1]:
-            y = np.repeat(y, repeats=x.shape[0] // y.shape[0], axis=0)
+        # repeat y to match flattened sequences (one label per original sample -> one per iteration)
+        if len(y.shape) >= 1 and y.shape[0] == num_samples:
+            y = np.repeat(y, repeats=num_iterations, axis=0)
 
         print("shape of labels after repeat:", y.shape)
 
-        # one-hot encode DNA
-        x = np.frombuffer(
-            b"".join(x.astype("S")),
-            dtype="S1"
-        ).reshape(len(x), -1)
-
-        onehot = (x[..., None] == np.frombuffer(b"ACGT", dtype="S1")).astype(np.uint8)
+        # One-hot encode DNA from index encoding (0=A, 1=C, 2=G, 3=T)
+        # x has shape (batch, seq_len) with values in [0, 1, 2, 3]
+        onehot = np.eye(4, dtype=np.float32)[x.astype(np.int64)]
         print("shape after one-hot encoding", onehot.shape)
 
-        # tensors
-        self.X_test = torch.tensor(onehot, dtype=torch.float32)
+        # tensors - transpose to (batch, 4, seq_len) for DeepSTARR conv1d
+        self.X_test = torch.tensor(onehot, dtype=torch.float32).permute(0, 2, 1)
+        print("shape after transpose for conv1d", self.X_test.shape)
         self.y_test = torch.tensor(y, dtype=torch.float32)
 
     def forward(self, x):

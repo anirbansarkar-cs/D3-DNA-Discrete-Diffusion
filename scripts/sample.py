@@ -641,10 +641,10 @@ class BaseSampler:
                 # Convert float8 to float16 for HDF5 compatibility
                 if sequences.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]:
                     print("Converting float8 to float16 for HDF5 compatibility")
-                    representations_data = sequences.to(torch.float16).cpu().numpy()
+                    sequences_data = sequences.to(torch.float16).cpu().numpy()
                 else:
-                    representations_data = sequences.cpu().numpy()
-                f.create_dataset("representations", data=representations_data)
+                    sequences_data = sequences.cpu().numpy()
+                f.create_dataset("sequences", data=sequences_data)
             print(f"Sequences saved as HDF5 to: {output_path} (encoding: {encoding}, shape: {sequences.shape})")
         elif format == "pt":
             # PyTorch native format - supports float8 natively (if available)
@@ -1072,6 +1072,8 @@ def parse_base_args():
                        help='Path to all_hits_combined.h5 (required when inpainting_mode != none)')
     parser.add_argument('--inpainting_seed', type=int, default=None,
                        help='Random seed for choosing dev vs hk positions when both are available')
+    parser.add_argument('--inpainting_iterations', type=int, default=1,
+                       help='Number of sampling iterations per sample (repeats sampling N times for each motif)')
 
     # Wandb logging arguments
     parser.add_argument('--use_wandb', action='store_true', default=False,
