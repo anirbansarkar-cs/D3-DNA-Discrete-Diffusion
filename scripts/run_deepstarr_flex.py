@@ -24,8 +24,20 @@ class PL_DeepSTARR(pl.LightningModule):
         # Load + preprocess test data
         # -------------------------
         with h5py.File(self.input_h5_file, "r") as f:
-            x = f["sequences"][:]               # (samples,)
+            x = f["sequences"][:]               # (samples,iterations, length)
             y = f["Y_target"][:]
+
+        print("shape before flattening", x.shape)
+
+        # flatten (samples, iterations, length) -> (samples*iterations, length)
+        x = x.reshape(-1, x.shape[-1])
+        print("shape after flattening", x.shape)
+
+        # flatten y to match sequences
+        if len(y.shape) > 1 and y.shape[0] == x.shape[0] // x.shape[1]:
+            y = np.repeat(y, repeats=x.shape[0] // y.shape[0], axis=0)
+
+        print("shape of labels after repeat:", y.shape)
 
         # one-hot encode DNA
         x = np.frombuffer(
@@ -33,9 +45,8 @@ class PL_DeepSTARR(pl.LightningModule):
             dtype="S1"
         ).reshape(len(x), -1)
 
-        onehot = (
-            x[..., None] == np.frombuffer(b"ACGT", dtype="S1")
-        ).astype(np.uint8)
+        onehot = (x[..., None] == np.frombuffer(b"ACGT", dtype="S1")).astype(np.uint8)
+        print("shape after one-hot encoding", onehot.shape)
 
         # tensors
         self.X_test = torch.tensor(onehot, dtype=torch.float32)
