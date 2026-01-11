@@ -24,9 +24,8 @@ class PL_DeepSTARR(pl.LightningModule):
         # Load + preprocess test data
         # -------------------------
         with h5py.File(self.input_h5_file, "r") as f:
-            x = f["sequence"][:]               # (samples,)
-            y_dev = f["activity_label_0"][:]   # (samples,)
-            y_hk = f["activity_label_1"][:]    # (samples,)
+            x = f["sequences"][:]               # (samples,)
+            y = f["Y_target"][:]
 
         # one-hot encode DNA
         x = np.frombuffer(
@@ -37,11 +36,6 @@ class PL_DeepSTARR(pl.LightningModule):
         onehot = (
             x[..., None] == np.frombuffer(b"ACGT", dtype="S1")
         ).astype(np.uint8)
-
-        # stack labels
-        y_dev = y_dev.reshape(len(y_dev), 1)
-        y_hk = y_hk.reshape(len(y_hk), 1)
-        y = np.concatenate([y_dev, y_hk], axis=1)
 
         # tensors
         self.X_test = torch.tensor(onehot, dtype=torch.float32)
@@ -93,8 +87,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        required=True,
-        default="'/grid/koo/home/shared/d3/oracle_weights/deepstarr/oracle_DeepSTARR_DeepSTARR_data.ckpt",
+        default="/grid/koo/home/shared/d3/oracle_weights/deepstarr/oracle_DeepSTARR_DeepSTARR_data.ckpt",
         help="Path to the pre-trained checkpoint (.ckpt)"
     )
     args = parser.parse_args()
