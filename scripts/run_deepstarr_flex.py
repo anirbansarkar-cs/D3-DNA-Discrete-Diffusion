@@ -1,0 +1,120 @@
+import os
+import h5py
+import torch
+import torch.nn as nn
+import torch.utils.data
+import numpy as np
+from scipy import stats
+import tqdm
+import pytorch_lightning as pl
+from model_zoo.deepstarr.deepstarr import DeepSTARR
+import argparse
+
+class PL_DeepSTARR(pl.LightningModule):
+    """Inference-only DeepSTARR wrapper."""
+
+    def __init__(self, input_h5_file: str, batch_size: int = 128):
+        super().__init__()
+
+        self.batch_size = batch_size
+        self.model = DeepSTARR(output_dim=2)
+        self.input_h5_file = input_h5_file
+
+        # -------------------------
+        # Load + preprocess test data
+        # -------------------------
+        with h5py.File(self.input_h5_file, "r") as f:
+            x = f["sequence"][:]               # (samples,)
+            y_dev = f["activity_label_0"][:]   # (samples,)
+            y_hk = f["activity_label_1"][:]    # (samples,)
+
+        # one-hot encode DNA
+        x = np.frombuffer(
+            b"".join(x.astype("S")),
+            dtype="S1"
+        ).reshape(len(x), -1)
+
+        onehot = (
+            x[..., None] == np.frombuffer(b"ACGT", dtype="S1")
+        ).astype(np.uint8)
+
+        # stack labels
+        y_dev = y_dev.reshape(len(y_dev), 1)
+        y_hk = y_hk.reshape(len(y_hk), 1)
+        y = np.concatenate([y_dev, y_hk], axis=1)
+
+        # tensors
+        self.X_test = torch.tensor(onehot, dtype=torch.float32)
+        self.y_test = torch.tensor(y, dtype=torch.float32)
+
+    def forward(self, x):
+        return self.model(x)
+
+    @torch.no_grad()
+    def predict(self):
+        self.eval()
+        loader = torch.utils.data.DataLoader(
+            self.X_test, batch_size=self.batch_size, shuffle=False
+        )
+
+        preds = []
+        for xb in loader:
+            xb = xb.to(self.device)
+            preds.append(self.model(xb).cpu())
+
+        return torch.cat(preds, dim=0)
+
+    def metrics(self, y_score, y_true):
+        spearman = []
+        pearson = []
+
+        for i in range(y_score.shape[1]):
+            spearman.append(
+                stats.spearmanr(y_true[:, i], y_score[:, i])[0]
+            )
+            pearson.append(
+                stats.pearsonr(y_true[:, i], y_score[:, i])[0]
+            )
+
+        return {
+            "Spearman": np.array(spearman),
+            "PCC": np.array(pearson),
+        }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="arg parser for fast deepstarr inference")
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default="./DeepSTARR_data.h5",
+        help="Path to the HDF5 data file containing sequences and labels"
+    )
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        required=True,
+        default="'/grid/koo/home/shared/d3/oracle_weights/deepstarr/oracle_DeepSTARR_DeepSTARR_data.ckpt",
+        help="Path to the pre-trained checkpoint (.ckpt)"
+    )
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = PL_DeepSTARR(input_h5_file=args.data_path)
+    checkpoint = torch.load(args.ckpt_path, map_location="cpu")
+    model.load_state_dict(checkpoint["state_dict"], strict=False)
+
+    model = model.to(device)
+    model.eval()
+
+    print("Running inference...")
+    y_pred = model.predict()
+    y_true = model.y_test
+
+    metrics = model.metrics(y_pred.numpy(), y_true.numpy())
+
+    print("Pearson:", metrics["PCC"])
+    print("Mean Pearson:", metrics["PCC"].mean())
+    print("Spearman:", metrics["Spearman"])
+    print("Mean Spearman:", metrics["Spearman"].mean())
