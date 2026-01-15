@@ -7,6 +7,24 @@ from model_zoo.deepstarr.deepstarr import DeepSTARR
 from utils.dinuc_shuffle import dinuc_shuffle
 import argparse
 
+def _dinuc_safe(seq):
+    # Accepts (L,4) or (4,L), returns same orientation
+    if seq.ndim != 2:
+        return seq
+
+    transposed = False
+    if seq.shape[0] == 4:
+        seq = seq.T
+        transposed = True
+
+    if seq.shape[0] > 1:
+        seq = dinuc_shuffle(seq)
+
+    if transposed:
+        seq = seq.T
+    return seq
+
+
 
 class PL_DeepSTARR(pl.LightningModule):
     def __init__(
@@ -31,7 +49,7 @@ class PL_DeepSTARR(pl.LightningModule):
             end_hk = f["end_hk"][:]
 
             if "sequences_onehot" in f:
-                onehot = f["sequences_onehot"][:]
+                onehot = np.squeeze(f["sequences_onehot"][:])   # (S*I, L, 4)
             else:
                 x_flat = x.reshape(-1, x.shape[-1])
                 onehot = np.eye(4, dtype=np.float32)[x_flat.astype(np.int64)]
@@ -46,27 +64,30 @@ class PL_DeepSTARR(pl.LightningModule):
         onehot_dinuc = onehot.copy()
 
         for i in range(onehot.shape[0]):
-            if not np.isnan(start_dev[i]):
-                s, e = int(start_dev[i]), int(end_dev[i])
-            elif not np.isnan(start_hk[i]):
-                s, e = int(start_hk[i]), int(end_hk[i])
+            sample_idx = i // I  # Map flattened index to original sample
+            if not np.isnan(start_dev[sample_idx]):
+                s, e = int(start_dev[sample_idx]), int(end_dev[sample_idx])
+            elif not np.isnan(start_hk[sample_idx]):
+                s, e = int(start_hk[sample_idx]), int(end_hk[sample_idx])
             else:
                 continue
 
             if self.mode == "motif":
                 seg = slice(s, e + 1)
+                if seg.stop - seg.start > 1:
+                    onehot_dinuc[i, seg] = _dinuc_safe(onehot[i, seg])
+
+            elif self.mode == "non_motif":
+                # left flank [0, s)
+                if s > 1:
+                    onehot_dinuc[i, :s] = _dinuc_safe(onehot[i, :s])
+
+                # right flank [e+1, L)
+                if e + 1 < L - 1:
+                    onehot_dinuc[i, e + 1 :] = _dinuc_safe(onehot[i, e + 1 :])
+
             else:
-                left = slice(0, s)
-                right = slice(e + 1, L)
-
-                if left.stop - left.start > 1:
-                    onehot_dinuc[i, left] = dinuc_shuffle(onehot[i, left])
-                if right.stop - right.start > 1:
-                    onehot_dinuc[i, right] = dinuc_shuffle(onehot[i, right])
-                continue
-
-            if seg.stop - seg.start > 1:
-                onehot_dinuc[i, seg] = dinuc_shuffle(onehot[i, seg])
+                raise ValueError(f"Unknown mode: {self.mode}")
 
         with h5py.File(self.input_h5_file, "a") as f:
             if "sequences_onehot" not in f:
@@ -78,6 +99,7 @@ class PL_DeepSTARR(pl.LightningModule):
         self.X_original = torch.tensor(onehot, dtype=torch.float32).permute(0, 2, 1)
         self.X_dinuc = torch.tensor(onehot_dinuc, dtype=torch.float32).permute(0, 2, 1)
         self.y_test = torch.tensor(y, dtype=torch.float32)
+
 
     @torch.no_grad()
     def predict(self, X):
@@ -101,7 +123,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", type=str, required=True)
     parser.add_argument("--ckpt_path", type=str, required=True)
-    parser.add_argument("--mode", choices=["motif", "non_motif"], default="motif")
+    parser.add_argument("--mode", choices=["motif", "non_motif"], default="non_motif")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
