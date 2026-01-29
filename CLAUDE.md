@@ -12,6 +12,21 @@ D3-DNA-Discrete-Diffusion implements discrete diffusion models for DNA sequence 
 ```bash
 # Install in development mode (recommended)
 pip install -e .
+
+# Install with dev dependencies (pytest, black, flake8, mypy)
+pip install -e ".[dev]"
+```
+
+### Linting and Formatting
+```bash
+# Format code
+black .
+
+# Check style
+flake8
+
+# Type checking
+mypy
 ```
 
 ### Training
@@ -22,10 +37,10 @@ python model_zoo/mpra/train.py --architecture convolutional
 python model_zoo/promoter/train.py --architecture transformer
 
 # Resume from checkpoint
-python model_zoo/deepstarr/train.py --architecture transformer --resume /path/to/checkpoint.ckpt
+python model_zoo/deepstarr/train.py --architecture transformer --resume_from /path/to/checkpoint.ckpt
 
-# Multi-GPU training (4 GPUs)
-python model_zoo/deepstarr/train.py --architecture transformer --ngpus 4
+# With WandB logging
+python model_zoo/deepstarr/train.py --architecture transformer --wandb_project d3-deepstarr --wandb_name exp1
 ```
 
 ### Sampling/Generation
@@ -227,6 +242,22 @@ The modular architecture requires minimal changes:
 - **sp_mse_callback.py**: Oracle-based validation callbacks
 - **inpainting.py**: `InpaintingManager` for constrained generation
 
+## WandB Integration
+
+Training and sampling scripts support Weights & Biases for experiment tracking:
+
+```bash
+# Training with WandB
+python model_zoo/deepstarr/train.py --architecture transformer \
+  --wandb_project d3-deepstarr --wandb_name experiment-1
+
+# Sampling with WandB
+python model_zoo/deepstarr/sample.py --architecture transformer --checkpoint model.ckpt \
+  --use_wandb --wandb_project d3-deepstarr-sampling --wandb_name baseline-run
+```
+
+Project naming convention: `d3-{dataset}-{experiment_type}` (e.g., `d3-deepstarr-sampling`, `d3-lentimpra-conditional`)
+
 ## Datasets
 
 ### DeepSTARR
@@ -245,6 +276,12 @@ The modular architecture requires minimal changes:
 - **Sequence Length**: 1024 bp
 - **Labels**: Expression values (concatenated with sequences)
 - **Oracle**: SEI (Sequence-to-Expression and Interaction) model
+
+### LentiMPRA
+- **Sequence Length**: 230 bp
+- **Labels**: Cell line-specific regulatory activities (K562, HepG2, WTC11)
+- **Variants**: Single-class and multi-class (3 cell lines combined)
+- **Oracle**: Cell line-specific predictors
 
 ## Development Principles
 
