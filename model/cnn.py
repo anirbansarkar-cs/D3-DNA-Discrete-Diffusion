@@ -185,7 +185,11 @@ class ConvolutionalModel(nn.Module):
         
         # Transpose back: (batch_size, seq_length, vocab_size)
         x = x.permute(0, 2, 1)
-        
+
+        # Zero out the logit at each position's current token to enforce
+        # the CTMC constraint (self-transition score = 0 in log-space)
+        x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
+
         return x
 
 
