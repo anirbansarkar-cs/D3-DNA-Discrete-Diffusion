@@ -1,6 +1,8 @@
 import abc
 import torch
 import torch.nn.functional as F
+from typing import List, Optional, Union
+from pathlib import Path
 from utils.catsample import sample_categorical
 
 from utils.utils import get_score_fn
@@ -81,6 +83,7 @@ class NonePredictor(Predictor):
 
 @register_predictor(name="analytic")
 class AnalyticPredictor(Predictor):
+    # this is the Tweedie Denoiser in the SEDD paper
     def update_fn(self, score_fn, x, labels, t, step_size, save_elements=None):
         curr_sigma = self.noise(t)[0]
         next_sigma = self.noise(t - step_size)[0]
@@ -134,8 +137,8 @@ class Denoiser:
         return sample_categorical(probs)
                        
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
-    
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, start_at_timestep=0):
+
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
                                  batch_dims=batch_dims,
@@ -143,22 +146,27 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
                                  steps=config.sampling.steps,
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
-                                 device=device)
-    
+                                 device=device,
+                                 start_at_timestep=start_at_timestep)
+
     return sampling_fn
     
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, save_elements_list=None, initial_x=None, start_at_timestep=0):
     # we have always use euler predictor, but there's also analytic
     predictor = get_predictor(predictor)(graph, noise)
-    projector = proj_fun
     denoiser = Denoiser(graph, noise)
 
     @torch.no_grad()
     def pc_sampler(model, labels):
         sampling_score_fn = get_score_fn(model, train=False, sampling=True)
-        # unless sample_limit() is implemented differently for another graph, this is always random
-        x = graph.sample_limit(*batch_dims).to(device)
+        # Use provided initial condition if available, otherwise sample from limit distribution
+        if initial_x is not None:
+            x = initial_x.to(device)
+        else:
+            # unless sample_limit() is implemented differently for another graph, this is always random
+            x = graph.sample_limit(*batch_dims).to(device)
+
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
 
@@ -172,9 +180,9 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
         if saved_elements and 'sequence' in saved_elements:
             saved_elements['sequence'].append(x.clone())
 
-        for i in range(steps):
+        for i in range(start_at_timestep, steps):
             t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
-            x = projector(x)
+            x = proj_fun(x)
             # Create save_elements dict excluding 'sequence' (we'll save it separately after update)
             predictor_save_elements = {}
             if saved_elements:
@@ -191,7 +199,7 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
 
         if denoise:
             # denoising step
-            x = projector(x)
+            x = proj_fun(x)
             t = timesteps[-1] * torch.ones(x.shape[0], 1, device=device)
             # Create save_elements dict excluding 'sequence' (we'll save it separately after update)
             denoiser_save_elements = {}

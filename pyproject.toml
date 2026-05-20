@@ -38,6 +38,7 @@ dependencies = [
     "numpy",
     "scipy",
     "tqdm",
+    "streamlit>=1.28.0",
 ]
 
 [project.optional-dependencies]

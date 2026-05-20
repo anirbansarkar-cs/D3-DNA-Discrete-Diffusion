@@ -1,0 +1,43 @@
+# Conda environment for D3-DNA-Discrete-Diffusion (env name: d3-new).
+#
+# Two-step install (see also setup_new.sh / post_install.sh):
+#   conda env create -f environment_new.yml -n d3-new
+#   conda activate d3-new
+#   bash post_install.sh
+#
+# This file lists ONLY packages that are imported at the top level somewhere
+# in the repo. Transitive deps (protobuf, jinja2, urllib3, etc.) are resolved
+# automatically by pip. post_install.sh handles torch/flash-attn (which need
+# --index-url / --no-build-isolation that conda yml cannot express) and the
+# editable install of this repo (pip install -e .).
+#
+# Optional install not handled here:
+#   - tangermeme  (install from the maintainer's fork; see
+#                  scripts/deepstarr_attributions_template.py for details)
+
+name: d3-new
+channels:
+  - defaults
+dependencies:
+  - python=3.9.18
+  - pip=23.3.1
+  - pip:
+    - datasets==2.17.1
+    - einops==0.7.0
+    - evoaug2==2.0.4       # installs as Python module `evoaug` (RobustLoader + RandomRC/...)
+    - filelock==3.9.0
+    - fsspec==2023.10.0    # used by model_zoo/ccre/traitgym_benchmark.py for S3 FASTA access
+    - h5py==3.10.0
+    - matplotlib==3.9.4
+    - numpy==1.24.1
+    - omegaconf==2.3.0
+    - pandas==2.2.1
+    - pyfaidx==0.8.1.1     # used by model_zoo/ccre/traitgym_benchmark.py for FASTA reading
+    - pytorch-lightning==2.1.0
+    - s3fs==2023.10.0      # used (via fsspec) for S3 paths in traitgym_benchmark.py
+    - scikit-learn==1.4.0
+    - scipy==1.13.1
+    - seaborn==0.13.2
+    - torchmetrics==1.8.2
+    - tqdm==4.66.2
+    - wandb==0.16.3

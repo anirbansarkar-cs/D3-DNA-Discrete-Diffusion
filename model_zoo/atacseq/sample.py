@@ -1,178 +1,114 @@
 #!/usr/bin/env python3
 """
-DeepSTARR Sampling Script
-
-This script provides sampling functionality specifically for the DeepSTARR dataset,
-inheriting from the base sampling classes and implementing DeepSTARR-specific
-model creation and label generation.
+ATAC-seq Sampling Script. Inherits from base sampling framework while using ATAC-seq-specific models directly.
 """
 
 import os
 import sys
+import argparse
 from pathlib import Path
 
-# Package imports
-
-from scripts.sample import BaseSampler, parse_base_args, main_sample
-from model_zoo.deepstarr.models import create_model
-from omegaconf import OmegaConf
 import torch
+from torch.utils.data import DataLoader
+from omegaconf import OmegaConf
+from typing import Optional
+
+# Add project root to Python path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+# Import base framework and ATAC-seq-specific components
+from scripts.sample import BaseSampler, parse_base_args, main_sample
 
 
-class DeepSTARRSampler(BaseSampler):
-    """Sampler specifically for DeepSTARR dataset."""
-    
+class ATACseqSampler(BaseSampler):
+    """ATAC-seq-specific sampler that inherits from base framework."""
+
     def __init__(self):
-        super().__init__('deepstarr')
-        
-    def create_model(self, config, architecture):
-        """Create DeepSTARR-specific model."""
-        return create_model(config, architecture)
-        
-    def get_sequence_length(self, config):
-        """Get DeepSTARR sequence length."""
-        # DeepSTARR uses 249 bp sequences
+        super().__init__("ATACseq")
+
+    def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
+        from model_zoo.atacseq.models import load_trained_model
+
+        return load_trained_model(checkpoint_path, config, architecture, self.device)
+
+    def get_sequence_length(self, config: OmegaConf) -> int:
         if hasattr(config, 'model') and hasattr(config.model, 'length'):
             return config.model.length
-        return 249
-    
-    def generate_labels(self, num_samples, config):
-        """
-        Generate conditioning labels for DeepSTARR sampling.
-        
-        DeepSTARR has two labels:
-        - Dev enhancer activity
-        - HK enhancer activity  
-        """
-        # Generate random labels in the range typical for DeepSTARR targets
-        # You might want to adjust these ranges based on your specific needs
-        dev_labels = torch.randn(num_samples, 1, device=self.device) * 2.0  # Adjust scale as needed
-        hk_labels = torch.randn(num_samples, 1, device=self.device) * 2.0   # Adjust scale as needed
-        
-        # Combine into shape (num_samples, 2)
-        labels = torch.cat([dev_labels, hk_labels], dim=1)
-        
-        return labels
-    
-    def sample_with_specific_labels(self, checkpoint_path, config, architecture,
-                                   dev_activity=None, hk_activity=None, **kwargs):
-        """
-        Sample sequences with specific enhancer activity targets.
-        
-        Args:
-            checkpoint_path: Path to model checkpoint
-            config: Configuration object
-            architecture: Architecture name
-            dev_activity: Target developmental enhancer activity (float or list)
-            hk_activity: Target housekeeping enhancer activity (float or list)
-            **kwargs: Additional sampling arguments
-        """
-        # Load model
-        model = self.load_model_from_checkpoint(checkpoint_path, config, architecture)
-        
-        num_samples = kwargs.get('num_samples', 1000)
-        
-        # Create specific labels if provided
-        if dev_activity is not None or hk_activity is not None:
-            if isinstance(dev_activity, (int, float)):
-                dev_activity = [dev_activity] * num_samples
-            if isinstance(hk_activity, (int, float)):
-                hk_activity = [hk_activity] * num_samples
-                
-            if dev_activity is None:
-                dev_activity = [0.0] * num_samples
-            if hk_activity is None:
-                hk_activity = [0.0] * num_samples
-                
-            # Create label tensor
-            labels = torch.tensor([
-                [dev, hk] for dev, hk in zip(dev_activity, hk_activity)
-            ], device=self.device, dtype=torch.float32)
-            
-            # Override the generate_labels method for this call
-            original_generate_labels = self.generate_labels
-            self.generate_labels = lambda n, cfg: labels
-            
-            try:
-                sequences = self.sample_sequences(model, config, num_samples, **kwargs)
-            finally:
-                # Restore original method
-                self.generate_labels = original_generate_labels
+        return 249  # ATAC-seq fixed sequence length
+
+    def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
+        # Get signal_dim from config (number of cell types)
+        if hasattr(config, 'dataset') and hasattr(config.dataset, 'signal_dim'):
+            signal_dim = config.dataset.signal_dim
         else:
-            sequences = self.sample_sequences(model, config, num_samples, **kwargs)
-        
-        return sequences
+            signal_dim = 18  # Default for ATAC-seq
 
-
-def load_config(architecture):
-    """Load DeepSTARR configuration."""
-    config_file = Path(__file__).parent / 'configs' / f'{architecture}.yaml'
-    if not config_file.exists():
-        raise FileNotFoundError(f"Config file not found: {config_file}")
-    return OmegaConf.load(config_file)
+        labels = torch.randn(num_samples, signal_dim, device=self.device) * 2.0
+        return labels
 
 
 def main():
-    """Main sampling function."""
+
     parser = parse_base_args()
-    parser.description = 'DeepSTARR Sampling Script'
-    
-    # Add DeepSTARR-specific arguments
-    parser.add_argument('--dev_activity', type=float, help='Target developmental enhancer activity')
-    parser.add_argument('--hk_activity', type=float, help='Target housekeeping enhancer activity')
-    
+    # Add ATAC-seq-specific conditioning arguments
+    parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
     args = parser.parse_args()
-    
-    # Create sampler
-    sampler = DeepSTARRSampler()
-    
-    # Load config if not provided
-    if not args.config:
+
+    config, _ = BaseSampler.load_config_with_fallback(
+        args.config, Path(__file__).parent, 'transformer.yaml'
+    )
+    sampler = ATACseqSampler()
+
+    conditioning_labels = None
+    if not args.unconditional:
+        conditioning_labels = sampler.generate_conditioning_labels(args.num_samples, config)
+        print(f"Using random cell type activities with shape {conditioning_labels.shape}")
+    else:
+        print("Sampling unconditionally (no conditioning labels)")
+
+    # Setup wandb if enabled
+    if args.use_wandb:
+        sampler.setup_wandb(args, config)
+
+    steps = args.steps if args.steps is not None else sampler.get_sequence_length(config)
+
+    print(f"Loading ATAC-seq {args.architecture} model from {args.checkpoint}")
+    result = sampler.sample_sequences_with_pc_sampler(
+        checkpoint_path=args.checkpoint,
+        config=config,
+        num_samples=args.num_samples,
+        steps=steps,
+        architecture=args.architecture,
+        conditioning_labels=conditioning_labels,
+        save_elements_list=args.save_elements
+    )
+
+    sequences, saved_elements, results = sampler.handle_sample_result(
+        result, args.output, args.format, args.sequence_encoding
+    )
+
+    results.update(sampler.handle_saved_elements(saved_elements, args.output, 'atacseq_samples'))
+
+    # Log to wandb if enabled
+    if sampler.wandb_enabled:
         try:
-            config = load_config(args.architecture)
-        except FileNotFoundError:
-            print(f"Error: No config provided and default config not found for architecture: {args.architecture}")
-            return 1
-    else:
-        config = OmegaConf.load(args.config)
-    
-    # Use specific label sampling if requested
-    if args.dev_activity is not None or args.hk_activity is not None:
-        sequences = sampler.sample_with_specific_labels(
-            checkpoint_path=args.checkpoint,
-            config=config,
-            architecture=args.architecture,
-            dev_activity=args.dev_activity,
-            hk_activity=args.hk_activity,
-            num_samples=args.num_samples,
-            method=args.method,
-            num_steps=args.num_steps,
-            eta=args.eta,
-            temperature=args.temperature
-        )
-        
-        # Save sequences
-        output_path = args.output or f"samples/deepstarr_{args.architecture}_{args.method}_specific_samples.{args.format}"
-        sampler.save_sequences(sequences, output_path, args.format)
-        
-        print(f"Sampling completed with specific labels. {args.num_samples} sequences generated.")
-    else:
-        # Use standard sampling
-        sequences = sampler.sample(
-            checkpoint_path=args.checkpoint,
-            config=config,
-            architecture=args.architecture,
-            num_samples=args.num_samples,
-            method=args.method,
-            num_steps=args.num_steps,
-            output_path=args.output,
-            format=args.format,
-            eta=args.eta,
-            temperature=args.temperature
-        )
-        
-        print(f"Sampling completed. {args.num_samples} sequences generated.")
-    
+            sampler.log_to_wandb(
+                sequences=sequences,
+                activity_labels=conditioning_labels,
+                saved_elements=saved_elements
+            )
+        except Exception as e:
+            print(f"Warning: Error logging to wandb: {e}")
+        finally:
+            sampler.cleanup_wandb()
+
+    print(f"\nATAC-seq Sampling Results:")
+    print("=" * 40)
+    for key, value in results.items():
+        print(f"{key}: {value}")
+
+    print(f"\n✓ ATAC-seq sampling completed successfully!")
     return 0
 
 

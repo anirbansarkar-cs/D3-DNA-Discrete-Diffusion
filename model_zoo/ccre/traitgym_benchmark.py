@@ -24,6 +24,8 @@ from sklearn.metrics import average_precision_score
 from datasets import load_dataset
 from omegaconf import OmegaConf
 from tqdm import tqdm
+import fsspec
+from pyfaidx import Fasta
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -43,14 +45,8 @@ class Genome:
             path: Path to genome FASTA file (local or s3)
         """
         try:
-            import fsspec
-            from pyfaidx import Fasta
             self.data = Fasta(fsspec.open(path, anon=True))
             print(f"✓ Loaded genome from {path}")
-        except ImportError:
-            print("Warning: pyfaidx or fsspec not available. Install with:")
-            print("pip install pyfaidx s3fs")
-            self.data = None
         except Exception as e:
             print(f"Warning: Could not load genome from {path}: {e}")
             self.data = None

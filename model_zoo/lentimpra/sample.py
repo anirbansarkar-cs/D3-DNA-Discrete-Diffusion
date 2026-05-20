@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """
-LentIMPRA Sampling Script
-
-Inherits from base sampling framework while using LentIMPRA-specific models directly.
-Uses proper PC sampling methodology.
+LentIMPRA Sampling Script. Inherits from base sampling framework while using LentIMPRA-specific models directly.
 """
 
 import os
 import sys
 import argparse
 from pathlib import Path
-
 import torch
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import h5py
 
@@ -34,20 +30,14 @@ class LentIMPRASampler(BaseSampler):
         super().__init__("LentIMPRA")
     
     def load_model(self, checkpoint_path: str, config: OmegaConf, architecture: str = 'transformer'):
-        """Load LentIMPRA model using dataset-specific model loading."""
         from model_zoo.lentimpra.models import load_trained_model
         
         return load_trained_model(checkpoint_path, config, architecture, self.device)
     
     def get_sequence_length(self, config: OmegaConf) -> int:
-        """Get LentIMPRA sequence length."""
         return 230  # LentIMPRA fixed sequence length
     
     def generate_conditioning_labels(self, num_samples: int, config: OmegaConf) -> torch.Tensor:
-        """Generate conditioning labels for LentIMPRA sampling.
-
-        Supports both single-class (N, 1) and multi-class (N, 3) based on config.
-        """
         # Check signal dimension from config (1 for single-class, 3 for multi-class)
         signal_dim = config.dataset.get('signal_dim', 1)
 
@@ -57,7 +47,6 @@ class LentIMPRASampler(BaseSampler):
 
 
 def load_default_config():
-    """Load LentIMPRA default configuration (transformer)."""
     config_file = Path(__file__).parent / 'configs' / 'transformer.yaml'
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
@@ -65,8 +54,7 @@ def load_default_config():
 
 
 def main():
-    """Main sampling function using base framework."""
-    # Parse arguments using base framework
+
     parser = parse_base_args()
     # Add LentIMPRA-specific conditioning arguments
     parser.add_argument('--activity', type=float, help='Regulatory activity value for single-class models (if not provided, uses random)')
@@ -74,93 +62,93 @@ def main():
     parser.add_argument('--hepg2_activity', type=float, help='HepG2 activity value for multi-class models')
     parser.add_argument('--wtc11_activity', type=float, help='WTC11 activity value for multi-class models')
     parser.add_argument('--unconditional', action='store_true', help='Sample unconditionally (ignoring any labels)')
-    parser.add_argument('--use_test_set', action='store_true', default=False, help='Use test set labels from dataset as conditioning labels')
-    parser.add_argument('--save_elements', type=str, nargs='+', default=None,
-                       choices=['sequence', 'score', 'stag_score', 'prob'],
-                       help='List of elements to save during sampling: sequence, score, stag_score, prob. '
-                            'Each will be saved as (N, L, T, 4) tensor in HDF5 format.')
+    # LentIMPRA-specific custom initialization arguments
+    parser.add_argument('--custom_inits_path', type=str, help='Path to a H5 file with sequences for custom initial conditions')
+    parser.add_argument('--custom_inits_step', type=int, default=10, help='Step to use for custom initial conditions')
     args = parser.parse_args()
-    
-    # Load config if not provided
-    if not args.config:
-        try:
-            config_path = Path(__file__).parent / 'configs' / 'transformer.yaml'  # Default to transformer
-            if config_path.exists():
-                args.config = str(config_path)
-                print(f"Using default config: {args.config}")
-            else:
-                print(f"Error: No config provided and default config not found: {config_path}")
-                print("Please provide a config file with --config")
-                return 1
-        except Exception as e:
-            print(f"Error loading default config: {e}")
-            return 1
-    
-    config = OmegaConf.load(args.config)
+
+    # TODO: unify save_elements with the save_rep and other functions in the BaseSampler class
+
+    # Load config using shared utility
+    config, _ = BaseSampler.load_config_with_fallback(
+        args.config, Path(__file__).parent, 'transformer.yaml'
+    )
     sampler = LentIMPRASampler()
 
     # Determine signal dimension from config (1 for single-class, 3 for multi-class)
     signal_dim = config.dataset.get('signal_dim', 1)
 
-    # Generate conditioning labels based on arguments
-    conditioning_labels = None
+    initial_x = None
     num_samples = args.num_samples
 
+    if args.initial_condition != 'random':
+        # TODO: either delete this custom loader later or make it more general
+        if args.initial_condition == 'custom':
+            if not args.custom_inits_path:
+                print("Error: --custom_inits_path is required when using --initial_condition custom")
+                return 1
+            h5_path = args.custom_inits_path
+            dataset_key = 'sequence'
+        else:
+            if not args.data_path:
+                print(f"Error: --data_path is required when using --initial_condition {args.initial_condition}")
+                return 1
+            h5_path = args.data_path
+            dataset_key = 'onehot_test_dinuc' if args.initial_condition == 'dinuc' else 'onehot_test'
+
+        with h5py.File(h5_path, 'r') as data:
+            onehot = np.array(data[dataset_key])
+
+            # TODO: remove or generalize
+            if args.initial_condition == 'custom':  # then the shape is (samples, 230, steps, 4), do step 10,25,40
+                onehot = onehot[:, :, args.custom_inits_step, :]
+        
+        num_samples = len(onehot)
+        # TODO: refine shape checking for standard expected input
+        if onehot.shape[1] != 4:
+            onehot = np.transpose(onehot, (0, 2, 1))
+        initial_x = torch.tensor(np.argmax(onehot, axis=1))
+        print(f"Loaded {num_samples} initial sequences: {initial_x.shape}")
+
+    conditioning_labels = None
     if not args.unconditional:
         if args.use_test_set:
-            # Use test set labels from dataset
             if not args.data_path:
                 print("Error: --data_path is required when using --use_test_set")
                 return 1
-
-            # Load test dataset to get labels
             from model_zoo.lentimpra.data import LentIMPRADataset
             test_dataset = LentIMPRADataset(args.data_path, split='test')
             conditioning_labels = test_dataset.y.to(sampler.device)
             num_samples = len(test_dataset)
-            print(f"Using test set labels: {num_samples} samples with shape {conditioning_labels.shape}")
 
         elif signal_dim == 1 and args.activity is not None:
-            # Single-class: user-specified activity
             conditioning_labels = torch.tensor([[args.activity]], device=sampler.device).expand(num_samples, -1)
-            print(f"Using specified activity: {args.activity}")
 
         elif signal_dim == 3:
-            # Multi-class: check if all three activities are specified
-            multi_class_activities = [args.k562_activity, args.hepg2_activity, args.wtc11_activity]
-            if all(a is not None for a in multi_class_activities):
-                # All three activities specified
-                conditioning_labels = torch.tensor(
-                    [[args.k562_activity, args.hepg2_activity, args.wtc11_activity]],
-                    device=sampler.device
-                ).expand(num_samples, -1)
-                print(f"Using specified activities - K562: {args.k562_activity}, HepG2: {args.hepg2_activity}, WTC11: {args.wtc11_activity}")
-            elif any(a is not None for a in multi_class_activities):
-                # Some but not all activities specified - this is an error
-                print("Error: For multi-class models, either specify all three activities (--k562_activity, --hepg2_activity, --wtc11_activity) or none")
+            activities = [args.k562_activity, args.hepg2_activity, args.wtc11_activity]
+            if all(a is not None for a in activities):
+                conditioning_labels = torch.tensor([activities], device=sampler.device).expand(num_samples, -1)
+            elif any(a is not None for a in activities):
+                print("Error: For multi-class models, specify all three activities or none")
                 return 1
             else:
-                # No activities specified, use random
                 conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
-                print(f"Using random activities (multi-class, {signal_dim} dimensions)")
+
         else:
-            # Random activity (default behavior)
             conditioning_labels = sampler.generate_conditioning_labels(num_samples, config)
-            print(f"Using random activities ({signal_dim} dimension{'s' if signal_dim > 1 else ''})")
-    else:
-        print("Sampling unconditionally (no conditioning labels)")
     
-    # Set default steps to sequence length if not provided
     steps = args.steps
     if steps is None:
         steps = sampler.get_sequence_length(config)
-        print(f"Using default steps: {steps} (sequence length)")
 
-    # Auto-detect architecture for multi-class models
     architecture = args.architecture
     if signal_dim > 1 and architecture == 'transformer':
         architecture = 'transformer_multi_class'
         print(f"Auto-detected multi-class model (signal_dim={signal_dim}), using architecture: {architecture}")
+
+    # Setup wandb if enabled
+    if args.use_wandb:
+        sampler.setup_wandb(args, config)
 
     # Run sampling using PC sampler
     print(f"Loading LentIMPRA {architecture} model from {args.checkpoint}")
@@ -171,70 +159,37 @@ def main():
         steps=steps,
         architecture=architecture,
         conditioning_labels=conditioning_labels,
-        save_elements_list=args.save_elements
+        save_elements_list=args.save_elements,
+        initial_x=initial_x,
+        start_at_timestep=args.start_at_timestep
     )
 
-    # Handle returned result (may be just sequences or (sequences, saved_elements))
-    if isinstance(result, tuple):
-        sequences, saved_elements = result
-    else:
-        sequences = result
-        saved_elements = None
+    # Handle result using shared utility
+    sequences, saved_elements, results = sampler.handle_sample_result(
+        result, args.output, args.format, args.sequence_encoding
+    )
 
-    # Save sequences if output path provided
-    if args.output:
-        sampler.save_sequences(sequences, args.output, args.format, args.sequence_encoding)
-        results = {
-            'num_sequences': len(sequences),
-            'sequence_length': sampler.get_sequence_length(config),
-            'output_file': args.output,
-            'encoding': args.sequence_encoding
-        }
-    else:
-        results = {
-            'num_sequences': len(sequences),
-            'sequence_length': sampler.get_sequence_length(config)
-        }
+    # Save elements if requested using shared utility
+    results.update(sampler.handle_saved_elements(saved_elements, args.output, 'lentimpra_samples'))
 
-    # Save elements if requested
-    if saved_elements:
-        # Determine output directory (use same directory as sequence output if provided)
-        if args.output:
-            output_dir = Path(args.output).parent
-            base_name = Path(args.output).stem
-        else:
-            output_dir = Path('.')
-            base_name = 'lentimpra_samples'
-
-        # Save all elements as datasets in a single HDF5 file
-        output_file = output_dir / f"{base_name}_elements.h5"
-
-        print(f"\nSaving sampling elements to {output_file}...")
-        with h5py.File(output_file, 'w') as f:
-            for elem_name, elem_tensor in saved_elements.items():
-                # elem_tensor shape: (N, L, T, 4)
-                f.create_dataset(elem_name, data=elem_tensor.numpy(), compression='gzip')
-                print(f"  Saved dataset '{elem_name}': shape {elem_tensor.shape}")
-
-            # Save metadata as attributes
-            first_elem = list(saved_elements.values())[0]
-            f.attrs['num_samples'] = first_elem.shape[0]
-            f.attrs['sequence_length'] = first_elem.shape[1]
-            f.attrs['num_timesteps'] = first_elem.shape[2]
-            f.attrs['num_classes'] = first_elem.shape[3]
-            f.attrs['saved_elements'] = list(saved_elements.keys())
-
-        print(f"  All elements saved to: {output_file}")
-        results['saved_elements_file'] = str(output_file)
-        results['saved_elements'] = list(saved_elements.keys())
+    # Log to wandb if enabled
+    if sampler.wandb_enabled:
+        try:
+            sampler.log_to_wandb(
+                sequences=sequences,
+                activity_labels=conditioning_labels,
+                saved_elements=saved_elements
+            )
+        except Exception as e:
+            print(f"Warning: Error logging to wandb: {e}")
+        finally:
+            sampler.cleanup_wandb()
 
     # Print results
-    print(f"\nLentIMPRA Sampling Results:")
+    print(f"\nLentiMPRA sampling complete. Results:")
     print("=" * 40)
     for key, value in results.items():
         print(f"{key}: {value}")
-
-    print(f"\n✓ LentIMPRA sampling completed successfully!")
     return 0
 
 

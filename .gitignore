@@ -30,6 +30,11 @@ __pycache__/
 lightning_runs/
 wandb/
 lightning_logs/
+slurm_scripts/
+figs/
+sampled_seqs/
+sampled_seqs_delayed/
+sampled_seqs_inits/
 
 experiments/
 evaluation_results/

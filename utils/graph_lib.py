@@ -153,10 +153,25 @@ class Uniform(Graph):
         i_pert = torch.where(move_indices, torch.randint_like(i, self.dim), i)
         return i_pert
 
+    # def staggered_score(self, score, dsigma):
+    #     dim = score.shape[-1]
+    #     epow = (-dsigma).exp()[..., None]
+    #     return ((epow - 1) / (dim * epow)) * score.sum(dim=-1, keepdim=True) + score / epow
+
     def staggered_score(self, score, dsigma):
-        dim = score.shape[-1]
-        epow = (-dsigma).exp()[..., None]
-        return ((epow - 1) / (dim * epow)) * score.sum(dim=-1, keepdim=True) + score / epow
+        dim = score.shape[-1] 
+        # e^(-Delta_sigma) is the survival probability of the process
+        epow = (-dsigma).exp()[..., None] 
+    
+        # Term 1: Scaling factor for the mean score across all dimensions
+        term1_factor = (epow - 1) / (dim * epow)
+        term1 = term1_factor * score.sum(dim=-1, keepdim=True)
+    
+        # Term 2: Scaling factor for the individual score vector
+        term2_factor = 1 / epow
+        term2 = score * term2_factor
+    
+        return term1 + term2
 
     def sample_limit(self, *batch_dims):
         # TODO: maybe try forcing another initial state?

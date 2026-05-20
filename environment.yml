@@ -150,4 +150,5 @@ dependencies:
     - pytorch-lightning
     - h5py
     - pandas
+    - streamlit>=1.28.0
 # prefix: /home/<username>/.mamba/envs/d3

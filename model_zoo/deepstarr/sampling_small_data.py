@@ -37,16 +37,11 @@ from scipy import stats
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
-# EvoAug imports (optional)
-try:
-    from evoaug.augment import (
-        RandomDeletion, RandomRC, RandomInsertion,
-        RandomTranslocation, RandomMutation, RandomNoise
-    )
-    from evoaug.evoaug import RobustLoader
-    EVOAUG_AVAILABLE = True
-except Exception:
-    EVOAUG_AVAILABLE = False
+from evoaug.augment import (
+    RandomDeletion, RandomRC, RandomInsertion,
+    RandomTranslocation, RandomMutation, RandomNoise,
+)
+from evoaug.evoaug import RobustLoader
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent.parent
@@ -440,8 +435,8 @@ def training_with_PL(dataset_path: str,
         train_dataset = TensorDataset(X_train, Y_train)
         val_dataset = TensorDataset(X_val, Y_val)
 
-        # Use EvoAug RobustLoader for training if requested and available
-        if use_evoaug and EVOAUG_AVAILABLE:
+        # Use EvoAug RobustLoader for training if requested
+        if use_evoaug:
             # Augmentation list matching data.py (lines 143-150)
             augment_list = [
                 RandomDeletion(delete_min=0, delete_max=20),
@@ -472,9 +467,6 @@ def training_with_PL(dataset_path: str,
                 pin_memory=True
             )
         else:
-            if use_evoaug and not EVOAUG_AVAILABLE:
-                print("Warning: EvoAug requested but not available. Falling back to standard dataloaders.")
-
             # Standard DataLoaders
             train_dataloader = DataLoader(
                 train_dataset,
