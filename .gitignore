@@ -49,3 +49,6 @@ target.sei.names
 *.tar
 
 mpra_old/
+
+# Local-only Claude Code config (skills, hooks, settings)
+.claude/
