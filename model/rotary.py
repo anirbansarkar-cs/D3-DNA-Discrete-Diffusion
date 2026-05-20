@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+import flash_attn.layers.rotary
+
 
 class Rotary(torch.nn.Module):
     def __init__(self, dim, base=10_000):
@@ -28,25 +30,7 @@ class Rotary(torch.nn.Module):
         return self.cos_cached, self.sin_cached
 
 
-def rotate_half(x):
-    x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
-    return torch.cat(
-        (-x2, x1), dim=-1
-    )
-
-
-@torch.jit.script
-def _apply_rotary_pos_emb_torchscript(qkv, cos, sin):
-    return (qkv * cos) + (rotate_half(qkv) * sin)
-
-
 def apply_rotary_pos_emb(qkv, cos, sin):
-    try:
-        import flash_attn.layers.rotary
-        cos = cos[0,:,0,0,:cos.shape[-1]//2]
-        sin = sin[0,:,0,0,:sin.shape[-1]//2]
-        return flash_attn.layers.rotary.apply_rotary_emb_qkv_(
-            qkv, cos, sin
-        )
-    except:
-        return _apply_rotary_pos_emb_torchscript(qkv, cos, sin)
+    cos = cos[0, :, 0, 0, : cos.shape[-1] // 2]
+    sin = sin[0, :, 0, 0, : sin.shape[-1] // 2]
+    return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)

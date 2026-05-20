@@ -13,17 +13,11 @@ from torch.utils.data import Dataset, TensorDataset, DataLoader, DistributedSamp
 from typing import Tuple, Optional
 from utils.data_utils import cycle_loader
 
-# EvoAug imports (optional)
-try:
-    from evoaug.augment import (
-        RandomDeletion, RandomRC, RandomInsertion,
-        RandomTranslocation, RandomMutation, RandomNoise
-    )
-    from evoaug.evoaug import RobustLoader
-    EvoAug_AVAILABLE = True
-except ImportError:
-    EvoAug_AVAILABLE = False
-    print("Warning: EvoAug not available. Install with: pip install evoaug")
+from evoaug.augment import (
+    RandomDeletion, RandomRC, RandomInsertion,
+    RandomTranslocation, RandomMutation, RandomNoise,
+)
+from evoaug.evoaug import RobustLoader
 
 
 class DeepSTARRDataset(Dataset):
@@ -135,10 +129,6 @@ class DeepSTARREvoAugDataset(Dataset):
 
 def create_evoaug_augmentation_list():
     """Create augmentation list with optimal DeepSTARR hyperparameters."""
-    if not EvoAug_AVAILABLE:
-        print("Warning: EvoAug not available. Returning empty augmentation list.")
-        return []
-    
     # Based on optimal DeepSTARR hyperparameters from the EvoAug paper
     augment_list = [
         RandomDeletion(delete_min=0, delete_max=20),
@@ -260,10 +250,6 @@ def get_deepstarr_evoaug_dataloaders(config, distributed: bool = True) -> Tuple[
     Returns:
         Tuple of (train_loader, valid_loader) with EvoAug augmentations
     """
-    if not EvoAug_AVAILABLE:
-        print("Warning: EvoAug not available. Falling back to standard dataloaders.")
-        return get_deepstarr_dataloaders(config, distributed)
-    
     # Validation checks
     if config.training.batch_size % (config.ngpus * config.training.accum) != 0:
         raise ValueError(

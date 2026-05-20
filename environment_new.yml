@@ -11,13 +11,9 @@
 # --index-url / --no-build-isolation that conda yml cannot express) and the
 # editable install of this repo (pip install -e .).
 #
-# Optional installs not handled here:
+# Optional install not handled here:
 #   - tangermeme  (install from the maintainer's fork; see
 #                  scripts/deepstarr_attributions_template.py for details)
-#   - evoaug      (pip install evoaug; only needed for data augmentation
-#                  in model_zoo/deepstarr/data.py and lentimpra/iterative_aug.py)
-#   - pyfaidx, fsspec, s3fs  (pip install ...; only needed by
-#                  model_zoo/ccre/traitgym_benchmark.py to read S3 FASTA)
 
 name: d3-new
 channels:
@@ -28,13 +24,17 @@ dependencies:
   - pip:
     - datasets==2.17.1
     - einops==0.7.0
+    - evoaug2==2.0.4       # installs as Python module `evoaug` (RobustLoader + RandomRC/...)
     - filelock==3.9.0
+    - fsspec==2023.10.0    # used by model_zoo/ccre/traitgym_benchmark.py for S3 FASTA access
     - h5py==3.10.0
     - matplotlib==3.9.4
     - numpy==1.24.1
     - omegaconf==2.3.0
     - pandas==2.2.1
+    - pyfaidx==0.8.1.1     # used by model_zoo/ccre/traitgym_benchmark.py for FASTA reading
     - pytorch-lightning==2.1.0
+    - s3fs==2023.10.0      # used (via fsspec) for S3 paths in traitgym_benchmark.py
     - scikit-learn==1.4.0
     - scipy==1.13.1
     - seaborn==0.13.2

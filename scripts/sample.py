@@ -60,13 +60,7 @@ class BaseSampler:
             self.wandb_enabled = False
             return
 
-        try:
-            import wandb
-        except ImportError:
-            print("Warning: wandb not installed. Install with: pip install wandb")
-            print("Continuing without wandb logging...")
-            self.wandb_enabled = False
-            return
+        import wandb
 
         # Set default project name if not provided
         project = args.wandb_project or f"{self.dataset_name.lower()}-sampling"
