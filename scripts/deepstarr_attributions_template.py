@@ -20,12 +20,16 @@ Two modes in one file (use this as a starting point for your own runs):
 NOTE - TangerMeme dependency
 ------------------------------------------------------------------------
 The `attributions` mode depends on a fix authored by the maintainer of
-this repo (@aduranu) that is now merged into upstream TangerMeme. The
-fix is required for `deep_lift_shap` to behave correctly on this
-codebase's DeepSTARR model. Installing an older released TangerMeme
-package from PyPI without this fix will produce incorrect or failing
-attribution runs - install TangerMeme from upstream master (or a version
-that contains the patch) before running this script.
+this repo (@aduranu). The fix is currently an OPEN pull request against
+upstream TangerMeme - it is NOT yet merged. Until the PR lands, the
+released TangerMeme package on PyPI does not contain this patch and
+`deep_lift_shap` will not run correctly here. To use this script you
+must install TangerMeme from the PR branch (the local fork lives at
+`~/tangermeme-worktrees/add-hook-stacks`), for example:
+
+    pip install -e ~/tangermeme-worktrees/add-hook-stacks
+
+Re-point this note once the upstream PR is merged and released.
 """
 
 import sys
