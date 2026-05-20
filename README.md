@@ -242,13 +242,15 @@ Evaluation metrics include:
 ## 📜 Citation
 
 ```bibtex
-@article{sarkar2024designing,
-  title={Designing DNA With Tunable Regulatory Activity Using Score-Entropy Discrete Diffusion},
-  author={Sarkar, Anirban and Kang, Yijie and Somia, Nirali and Mantilla, Pablo and Zhou, Jessica Lu and Nagai, Masayuki and Tang, Ziqi and Zhao, Chris and Koo, Peter},
-  journal={bioRxiv},
-  pages={2024--05},
-  year={2024},
-  publisher={Cold Spring Harbor Laboratory}
+@article{sarkar2024d3dna,
+    title = {Designing {DNA} With Tunable Regulatory Activity Using Discrete Diffusion},
+    author = {Sarkar, Anirban and Duran, Alejandra and Yu, Yiyang and Lin, Da-Wei and Kang, Yijie and Somia, Nirali and Mantilla, Pablo and Zhou, Jessica and Nagai, Masayuki and Tang, Ziqi and Hanington, Kaarina and Chang, Kenneth and Koo, Peter K.},
+    journal = {bioRxiv},
+    year = {2024},
+    doi = {10.1101/2024.05.23.595630},
+    url = {https://www.biorxiv.org/content/10.1101/2024.05.23.595630v3},
+    publisher = {Cold Spring Harbor Laboratory},
+    note = {Preprint, version 3}
 }
 ```
 
